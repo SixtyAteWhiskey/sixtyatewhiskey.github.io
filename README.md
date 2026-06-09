@@ -5,7 +5,13 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
 ## Features
 
 - Enter one aperture / clear-opening diameter in millimeters.
-- Automatically scales the printed thickness, outer rim, slat pitch, slat width, and circle smoothness from that diameter.
+- Automatically scales the printed thickness, outer rim, slat pitch, slat width, and preview smoothness from that diameter.
+- Generates a classic Bahtinov layout:
+  - left half: straight horizontal slats
+  - upper-right: diagonal slats
+  - lower-right: opposite diagonal slats
+  - center: a single straight divider rib
+- Exports the STL as a single grid/voxel-style watertight mesh to avoid slicer clipping from overlapping solids.
 - Shows the calculated printed outside diameter.
 - Optional advanced/manual override mode for fine tuning, including the center divider position.
 - Live SVG preview.
@@ -22,7 +28,7 @@ Example: a 100 mm aperture with a 6 mm rim produces a printed outside diameter o
 ## GitHub Pages setup
 
 1. Create a new GitHub repository.
-2. Upload `index.html`, `styles.css`, `script.js`, and `.nojekyll` to the repository root.
+2. Upload `index.html`, `styles.css`, `script.js`, `README.md`, and `.nojekyll` to the repository root.
 3. In GitHub, go to **Settings → Pages**.
 4. Under **Build and deployment**, select **Deploy from a branch**.
 5. Select your main branch and `/root`, then save.
@@ -30,11 +36,10 @@ Example: a 100 mm aperture with a 6 mm rim produces a printed outside diameter o
 
 ## Printing notes
 
-- The STL is built from an outer ring, solid slats, and an optional center hub.
-- The slats slightly overlap the rim so slicers usually merge them cleanly.
-- If your slicer reports non-manifold/overlapping geometry, use the slicer's repair option.
+- The STL is generated as one mesh, not a pile of overlapping rectangles. This should import much cleaner in Bambu Studio, OrcaSlicer, PrusaSlicer, and similar tools.
+- The STL mesh is intentionally grid-based. That makes the edges slightly stair-stepped at high zoom, but it avoids non-manifold clipping artifacts.
 - For thin masks, print slowly and use enough perimeters. PETG, ASA, PLA+, or PC blends are good candidates depending on outdoor/heat exposure.
 
 ## Important caveat
 
-This generator makes a practical Bahtinov-style mask, not a fully optical-theory-optimized mask. The automatic values should work for general focusing, but serious astrophotography users may want to experiment with pitch, slat width, and angle for their focal length and camera setup.
+This generator makes a practical classic-layout Bahtinov mask, not a fully optical-theory-optimized mask. The automatic values should work for general focusing, but serious astrophotography users may want to experiment with pitch, slat width, and angle for their focal length and camera setup.
