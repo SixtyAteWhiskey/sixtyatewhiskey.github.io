@@ -9,7 +9,7 @@
 <body>
   <header class="hero">
     <div>
-      <p class="eyebrow">Static GitHub Pages App</p>
+      <p class="eyebrow">Static GitHub Pages App · Classic Layout v3</p>
       <h1>Bahtinov Mask STL Generator</h1>
       <p class="lede">Enter one aperture diameter in millimeters and the generator automatically scales the rim, slats, thickness, spacing, and STL detail. Everything runs locally in your browser.</p>
     </div>
@@ -71,9 +71,9 @@
           </label>
 
           <label>
-            <span>Split point position</span>
-            <input id="centerFraction" type="number" min="0.00" max="0.45" step="0.01" value="0.14" />
-            <small>Fraction of the aperture radius used to place the Bahtinov split point to the right of center. Lower = more left-side slats.</small>
+            <span>Vertical split position</span>
+            <input id="centerFraction" type="number" min="-0.35" max="0.35" step="0.01" value="0.00" />
+            <small>Fraction of the aperture radius used to move the divider left/right. 0.00 keeps the divider centered.</small>
           </label>
 
           <label>
@@ -104,7 +104,7 @@
         <span id="partCount" class="pill">0 parts</span>
       </div>
       <svg id="preview" viewBox="-60 -60 120 120" role="img" aria-label="Bahtinov mask preview"></svg>
-      <p class="note">The STL is generated from printable solid slats plus an outer ring. Most slicers merge the touching/overlapping solids cleanly. If your slicer complains, use its “repair model” option.</p>
+      <p class="note">The STL is generated from a classic Bahtinov layout: horizontal left slats, opposing diagonal right slats, and an outer ring. Most slicers merge the touching/overlapping solids cleanly. If your slicer complains, use its “repair model” option.</p>
     </section>
   </main>
 

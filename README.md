@@ -7,7 +7,7 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
 - Enter one aperture / clear-opening diameter in millimeters.
 - Automatically scales the printed thickness, outer rim, slat pitch, slat width, and circle smoothness from that diameter.
 - Shows the calculated printed outside diameter.
-- Optional advanced/manual override mode for fine tuning.
+- Optional advanced/manual override mode for fine tuning, including the center divider position.
 - Live SVG preview.
 - Download STL for slicing.
 - Download SVG for reference or laser/CNC workflows.
@@ -30,11 +30,11 @@ Example: a 100 mm aperture with a 6 mm rim produces a printed outside diameter o
 
 ## Printing notes
 
-- The STL is built from an outer ring, a classic 3-zone Bahtinov slit layout, and an optional center hub.
+- The STL is built from an outer ring, solid slats, and an optional center hub.
 - The slats slightly overlap the rim so slicers usually merge them cleanly.
 - If your slicer reports non-manifold/overlapping geometry, use the slicer's repair option.
 - For thin masks, print slowly and use enough perimeters. PETG, ASA, PLA+, or PC blends are good candidates depending on outdoor/heat exposure.
 
 ## Important caveat
 
-This generator makes a practical classic-layout Bahtinov mask, not a fully optical-theory-optimized mask. The automatic values should work for general focusing, but serious astrophotography users may want to experiment with pitch, slat width, and angle for their focal length and camera setup.
+This generator makes a practical Bahtinov-style mask, not a fully optical-theory-optimized mask. The automatic values should work for general focusing, but serious astrophotography users may want to experiment with pitch, slat width, and angle for their focal length and camera setup.

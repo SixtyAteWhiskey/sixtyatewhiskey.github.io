@@ -61,7 +61,7 @@ function autoDimensions(apertureDiameter) {
     pitch,
     barWidth,
     angle: 20,
-    centerFraction: 0.14,
+    centerFraction: 0.00,
     hubDiameter: 0,
     segments: d > 400 ? 384 : d > 225 ? 320 : d > 125 ? 256 : 192,
   };
@@ -115,7 +115,6 @@ function settings() {
     hubDiameter: num(fields.hubDiameter),
     segments: Math.round(num(fields.segments) / 2) * 2,
     overlap: clamp(apertureDiameter * 0.003, 0.25, 1.0),
-    separatorAngleDeg: 30,
   };
 }
 
@@ -191,71 +190,81 @@ function polygonArea(poly) {
   return area / 2;
 }
 
-function buildZonePolygon(base, zone, splitX, splitSlope) {
-  let poly = base.slice();
+function clipToBox(poly, minX, maxX, minY, maxY) {
+  let out = poly.slice();
+  out = clipHalfPlane(out, 1, 0, maxX, true);   // x <= maxX
+  out = clipHalfPlane(out, 1, 0, minX, false);  // x >= minX
+  out = clipHalfPlane(out, 0, 1, maxY, true);   // y <= maxY
+  out = clipHalfPlane(out, 0, 1, minY, false);  // y >= minY
+  return out;
+}
 
-  if (zone === 'left-upper') {
-    poly = clipHalfPlane(poly, 0, 1, 0, false);             // y >= 0
-    poly = clipHalfPlane(poly, 1, -splitSlope, splitX, true); // x - m*y <= splitX
-  } else if (zone === 'left-lower') {
-    poly = clipHalfPlane(poly, 0, 1, 0, true);              // y <= 0
-    poly = clipHalfPlane(poly, 1, splitSlope, splitX, true);  // x + m*y <= splitX
-  } else if (zone === 'upper-right') {
-    poly = clipHalfPlane(poly, 0, 1, 0, false);             // y >= 0
-    poly = clipHalfPlane(poly, 1, -splitSlope, splitX, false); // x - m*y >= splitX
-  } else if (zone === 'lower-right') {
-    poly = clipHalfPlane(poly, 0, 1, 0, true);              // y <= 0
-    poly = clipHalfPlane(poly, 1, splitSlope, splitX, false);  // x + m*y >= splitX
+function maybeAddPolygon(list, poly, name) {
+  if (poly.length >= 3 && Math.abs(polygonArea(poly)) > 0.5) {
+    if (polygonArea(poly) < 0) poly.reverse();
+    list.push({ kind: 'polygon', points: poly, name });
   }
+}
 
-  return poly;
+function makeSlatsForZone(zonePoly, zoneName, angleDeg, s, list) {
+  const theta = angleDeg * Math.PI / 180;
+  // u is the long direction of the slat. n is perpendicular and sets pitch spacing.
+  const nx = -Math.sin(theta);
+  const ny = Math.cos(theta);
+  const maxOffset = s.apertureRadius * 1.75;
+  const start = Math.floor(-maxOffset / s.pitch) - 1;
+  const end = Math.ceil(maxOffset / s.pitch) + 1;
+
+  for (let k = start; k <= end; k++) {
+    const c = k * s.pitch;
+    let poly = zonePoly.slice();
+    poly = clipHalfPlane(poly, nx, ny, c + s.barWidth / 2, true);
+    poly = clipHalfPlane(poly, nx, ny, c - s.barWidth / 2, false);
+    maybeAddPolygon(list, poly, `${zoneName}-slat-${k}`);
+  }
 }
 
 function makeSlats(s) {
   const clearRWithOverlap = s.apertureRadius + s.overlap;
   const base = circlePolygon(clearRWithOverlap, s.segments);
   const hubR = Math.max(0, s.hubDiameter / 2 - s.overlap);
-  const splitSlope = 1 / Math.tan(s.separatorAngleDeg * Math.PI / 180);
-  const zones = [
-    { name: 'left-upper', angle: 0 },
-    { name: 'left-lower', angle: 0 },
-    { name: 'upper-right', angle: -s.angleDeg },
-    { name: 'lower-right', angle: s.angleDeg },
-  ];
+  const splitX = s.splitPointX;
+  const spineWidth = Math.max(s.barWidth * 1.15, 1.0);
+  const spineHalf = spineWidth / 2;
+  const r = clearRWithOverlap;
+  const shapes = [];
 
-  const slats = [];
-  for (const zone of zones) {
-    const zonePoly = buildZonePolygon(base, zone.name, s.splitPointX, splitSlope);
-    if (zonePoly.length < 3) continue;
+  // Center divider. This is the vertical solid rib visible in the reference design.
+  maybeAddPolygon(
+    shapes,
+    clipToBox(base, splitX - spineHalf, splitX + spineHalf, -r, r),
+    'vertical-divider'
+  );
 
-    const theta = zone.angle * Math.PI / 180;
-    // u is the long direction of the slat. n is perpendicular and sets pitch spacing.
-    const nx = -Math.sin(theta);
-    const ny = Math.cos(theta);
-    const maxOffset = clearRWithOverlap * 1.5;
-    const start = Math.floor(-maxOffset / s.pitch) - 1;
-    const end = Math.ceil(maxOffset / s.pitch) + 1;
+  // Classic Bahtinov zones:
+  // left half = straight horizontal bars
+  // upper-right = diagonal bars one way
+  // lower-right = diagonal bars the opposite way
+  const leftZone = clipToBox(base, -r, splitX + spineHalf + s.overlap, -r, r);
+  const upperRightZone = clipToBox(base, splitX - spineHalf - s.overlap, r, 0, r);
+  const lowerRightZone = clipToBox(base, splitX - spineHalf - s.overlap, r, -r, 0);
 
-    for (let k = start; k <= end; k++) {
-      const c = k * s.pitch;
-      let poly = zonePoly.slice();
-      poly = clipHalfPlane(poly, nx, ny, c + s.barWidth / 2, true);
-      poly = clipHalfPlane(poly, nx, ny, c - s.barWidth / 2, false);
+  makeSlatsForZone(leftZone, 'left-horizontal', 0, s, shapes);
+  makeSlatsForZone(upperRightZone, 'upper-right-diagonal', s.angleDeg, s, shapes);
+  makeSlatsForZone(lowerRightZone, 'lower-right-diagonal', -s.angleDeg, s, shapes);
 
-      if (hubR > 0 && poly.length) {
-        const centroid = poly.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-        centroid.x /= poly.length;
-        centroid.y /= poly.length;
-        if (Math.hypot(centroid.x, centroid.y) < hubR * 0.8) poly = [];
-      }
-
-      if (poly.length >= 3 && Math.abs(polygonArea(poly)) > 0.5) {
-        if (polygonArea(poly) < 0) poly.reverse();
-        slats.push({ kind: 'polygon', points: poly, name: `${zone.name}-slat-${k}` });
-      }
-    }
+  if (hubR > 0) {
+    // Remove slats whose centroid falls mostly inside the optional hub area.
+    return shapes.filter((shape) => {
+      if (shape.kind !== 'polygon' || !shape.points.length) return true;
+      const centroid = shape.points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
+      centroid.x /= shape.points.length;
+      centroid.y /= shape.points.length;
+      return Math.hypot(centroid.x, centroid.y) >= hubR * 0.8;
+    });
   }
-  return slats;
+
+  return shapes;
 }
 
 function makeGeometry(s) {
