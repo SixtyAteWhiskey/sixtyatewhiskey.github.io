@@ -9,9 +9,9 @@
 <body>
   <header class="hero">
     <div>
-      <p class="eyebrow">Static GitHub Pages App · Classic Layout v5</p>
+      <p class="eyebrow">Static GitHub Pages App · Classic Layout v6</p>
       <h1>Bahtinov Mask STL Generator</h1>
-      <p class="lede">Enter one aperture diameter in millimeters and the generator automatically scales the rim, slats, thickness, spacing, and STL detail. STL export is a single clean mesh and now includes an optional mounting lip/skirt so it can sit over a lens.</p>
+      <p class="lede">Enter one aperture diameter in millimeters and the generator automatically scales the rim, slats, thickness, spacing, and STL detail. STL export now uses cleaner exact vector extrusion instead of the blocky grid mesh, and includes an optional mounting lip/skirt so it can sit over a lens.</p>
     </div>
   </header>
 
@@ -108,7 +108,7 @@
           <label>
             <span>Circle smoothness</span>
             <input id="segments" type="number" min="64" max="512" step="16" value="192" />
-            <small>Higher = smoother SVG preview. STL export uses an internal single-mesh grid to avoid overlapping solids.</small>
+            <small>Higher = smoother circles in the SVG preview and STL export.</small>
           </label>
         </details>
       </form>

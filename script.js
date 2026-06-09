@@ -1,15 +1,15 @@
 /*
-  Bahtinov Mask STL Generator · Classic Layout v5
+  Bahtinov Mask STL Generator · Classic Layout v6
   Pure browser JavaScript. No build step. Safe for GitHub Pages.
 
-  v5 changes:
+  v6 changes:
   - Generates the classic Bahtinov visual pattern:
       * left half = straight horizontal slats
       * upper-right = diagonal slats
       * lower-right = opposite diagonal slats
       * center = one straight divider rib
-  - STL export uses a single heightfield mesh instead of overlapping solids.
-    This avoids the ugly slicer clipping/z-fighting caused by stacked internal faces.
+  - STL export uses exact vector/polygon extrusion again instead of a voxel/grid mesh.
+    This removes the blocky stair-step artifacts visible in slicers.
   - Optional mounting lip/skirt around the rim so the mask can sit over a lens/dew shield.
 */
 
@@ -285,54 +285,6 @@ function makePreviewGeometry(s) {
   return shapes;
 }
 
-function band(distance, pitch, width) {
-  const wrapped = ((distance + pitch / 2) % pitch + pitch) % pitch - pitch / 2;
-  return Math.abs(wrapped) <= width / 2;
-}
-
-function pointIsSolid(x, y, s) {
-  const r = Math.hypot(x, y);
-  if (r > s.outerRadius) return false;
-
-  // Outer ring.
-  if (r >= s.apertureRadius) return true;
-
-  // Optional central obstruction/hub.
-  if (s.hubDiameter > 0 && r <= s.hubDiameter / 2) return true;
-
-  const splitX = s.splitPointX;
-  const dividerWidth = Math.max(s.barWidth * 1.15, 1.0);
-  const dividerHalf = dividerWidth / 2;
-
-  // Center divider rib.
-  if (Math.abs(x - splitX) <= dividerHalf) return true;
-
-  // Classic mask zones.
-  if (x < splitX - dividerHalf) {
-    return band(y, s.pitch, s.barWidth); // left straight horizontal slats
-  }
-
-  if (x > splitX + dividerHalf) {
-    const theta = (y >= 0 ? s.angleDeg : -s.angleDeg) * Math.PI / 180;
-    const nx = -Math.sin(theta);
-    const ny = Math.cos(theta);
-    return band(nx * x + ny * y, s.pitch, s.barWidth);
-  }
-
-  return false;
-}
-
-function pointIsLipSolid(x, y, s) {
-  if (!s.lipEnabled) return false;
-  const r = Math.hypot(x, y);
-  return r >= s.lipInnerRadius && r <= s.lipOuterRadius;
-}
-
-function pointTopHeight(x, y, s) {
-  if (!pointIsSolid(x, y, s)) return 0;
-  return s.thickness + (pointIsLipSolid(x, y, s) ? s.lipHeight : 0);
-}
-
 function normal(a, b, c) {
   const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
   const vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
@@ -354,177 +306,127 @@ function addQuad(tris, a, b, c, d) {
   tris.push([a, c, d]);
 }
 
-function makeGrid(s) {
-  const targetCell = clamp(s.apertureDiameter / 300, 0.18, 2.5);
-  const cells = Math.max(48, Math.ceil(s.outerDiameter / targetCell));
-  const cell = s.outerDiameter / cells;
-  const min = -s.outerRadius;
-  const grid = Array.from({ length: cells }, () => new Uint8Array(cells));
-  const heights = Array.from({ length: cells }, () => new Float32Array(cells));
-  let solidCount = 0;
+function extrudePolygon(poly, z0, z1) {
+  const tris = [];
+  if (!poly || poly.length < 3 || z1 <= z0) return tris;
 
-  for (let j = 0; j < cells; j++) {
-    const y = min + (j + 0.5) * cell;
-    for (let i = 0; i < cells; i++) {
-      const x = min + (i + 0.5) * cell;
-      const h = pointTopHeight(x, y, s);
-      if (h > 0) {
-        grid[j][i] = 1;
-        heights[j][i] = h;
-        solidCount++;
-      }
-    }
+  if (polygonArea(poly) < 0) poly = poly.slice().reverse();
+
+  // Bottom face, clockwise when viewed from above.
+  for (let i = 1; i < poly.length - 1; i++) {
+    tris.push([
+      { ...poly[0], z: z0 },
+      { ...poly[i + 1], z: z0 },
+      { ...poly[i], z: z0 },
+    ]);
   }
 
-  return { grid, heights, cells, cell, min, solidCount };
+  // Top face.
+  for (let i = 1; i < poly.length - 1; i++) {
+    tris.push([
+      { ...poly[0], z: z1 },
+      { ...poly[i], z: z1 },
+      { ...poly[i + 1], z: z1 },
+    ]);
+  }
+
+  // Side walls.
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i];
+    const b = poly[(i + 1) % poly.length];
+    addQuad(
+      tris,
+      { ...a, z: z0 },
+      { ...b, z: z0 },
+      { ...b, z: z1 },
+      { ...a, z: z1 }
+    );
+  }
+
+  return tris;
 }
 
-function sameHeight(a, b) {
-  return Math.abs(a - b) < 1e-6;
+function annulusTriangles(outerR, innerR, segments, z0, z1) {
+  const tris = [];
+  if (outerR <= innerR || z1 <= z0) return tris;
+
+  for (let i = 0; i < segments; i++) {
+    const a0 = i / segments * Math.PI * 2;
+    const a1 = (i + 1) / segments * Math.PI * 2;
+    const po0 = { x: Math.cos(a0) * outerR, y: Math.sin(a0) * outerR };
+    const po1 = { x: Math.cos(a1) * outerR, y: Math.sin(a1) * outerR };
+    const pi0 = { x: Math.cos(a0) * innerR, y: Math.sin(a0) * innerR };
+    const pi1 = { x: Math.cos(a1) * innerR, y: Math.sin(a1) * innerR };
+
+    // Top annular face.
+    tris.push([{ ...po0, z: z1 }, { ...po1, z: z1 }, { ...pi1, z: z1 }]);
+    tris.push([{ ...po0, z: z1 }, { ...pi1, z: z1 }, { ...pi0, z: z1 }]);
+
+    // Bottom annular face.
+    tris.push([{ ...po0, z: z0 }, { ...pi1, z: z0 }, { ...po1, z: z0 }]);
+    tris.push([{ ...po0, z: z0 }, { ...pi0, z: z0 }, { ...pi1, z: z0 }]);
+
+    // Outer wall.
+    addQuad(
+      tris,
+      { ...po0, z: z0 },
+      { ...po1, z: z0 },
+      { ...po1, z: z1 },
+      { ...po0, z: z1 }
+    );
+
+    // Inner wall.
+    addQuad(
+      tris,
+      { ...pi1, z: z0 },
+      { ...pi0, z: z0 },
+      { ...pi0, z: z1 },
+      { ...pi1, z: z1 }
+    );
+  }
+
+  return tris;
 }
 
-function greedyTopBottom(tris, gridInfo) {
-  const { grid, heights, cells, cell, min } = gridInfo;
-
-  // Top faces: merge only cells with the same top height so lip steps stay real geometry.
-  const topVisited = Array.from({ length: cells }, () => new Uint8Array(cells));
-  for (let j = 0; j < cells; j++) {
-    for (let i = 0; i < cells; i++) {
-      const h0 = heights[j][i];
-      if (!grid[j][i] || topVisited[j][i] || h0 <= 0) continue;
-
-      let w = 1;
-      while (i + w < cells && grid[j][i + w] && !topVisited[j][i + w] && sameHeight(heights[j][i + w], h0)) w++;
-
-      let hCells = 1;
-      let canGrow = true;
-      while (j + hCells < cells && canGrow) {
-        for (let x = i; x < i + w; x++) {
-          if (!grid[j + hCells][x] || topVisited[j + hCells][x] || !sameHeight(heights[j + hCells][x], h0)) {
-            canGrow = false;
-            break;
-          }
-        }
-        if (canGrow) hCells++;
-      }
-
-      for (let yy = j; yy < j + hCells; yy++) {
-        for (let xx = i; xx < i + w; xx++) topVisited[yy][xx] = 1;
-      }
-
-      const x0 = min + i * cell;
-      const x1 = min + (i + w) * cell;
-      const y0 = min + j * cell;
-      const y1 = min + (j + hCells) * cell;
-
-      addQuad(
-        tris,
-        { x: x0, y: y0, z: h0 },
-        { x: x1, y: y0, z: h0 },
-        { x: x1, y: y1, z: h0 },
-        { x: x0, y: y1, z: h0 }
-      );
-    }
+function shapeTriangles(shape, s) {
+  if (shape.kind === 'annulus') {
+    return annulusTriangles(shape.outerR, shape.innerR, shape.segments, 0, s.thickness);
   }
 
-  // Bottom faces: merge the full solid footprint at z=0.
-  const bottomVisited = Array.from({ length: cells }, () => new Uint8Array(cells));
-  for (let j = 0; j < cells; j++) {
-    for (let i = 0; i < cells; i++) {
-      if (!grid[j][i] || bottomVisited[j][i]) continue;
-
-      let w = 1;
-      while (i + w < cells && grid[j][i + w] && !bottomVisited[j][i + w]) w++;
-
-      let hCells = 1;
-      let canGrow = true;
-      while (j + hCells < cells && canGrow) {
-        for (let x = i; x < i + w; x++) {
-          if (!grid[j + hCells][x] || bottomVisited[j + hCells][x]) {
-            canGrow = false;
-            break;
-          }
-        }
-        if (canGrow) hCells++;
-      }
-
-      for (let yy = j; yy < j + hCells; yy++) {
-        for (let xx = i; xx < i + w; xx++) bottomVisited[yy][xx] = 1;
-      }
-
-      const x0 = min + i * cell;
-      const x1 = min + (i + w) * cell;
-      const y0 = min + j * cell;
-      const y1 = min + (j + hCells) * cell;
-
-      addQuad(
-        tris,
-        { x: x0, y: y0, z: 0 },
-        { x: x0, y: y1, z: 0 },
-        { x: x1, y: y1, z: 0 },
-        { x: x1, y: y0, z: 0 }
-      );
-    }
+  if (shape.kind === 'lip-annulus') {
+    // The lip/skirt grows upward from the mask rim. Print flat, then use the lip side against the lens/dew shield.
+    return annulusTriangles(shape.outerR, shape.innerR, shape.segments, s.thickness, s.totalHeight);
   }
-}
 
-function addSideWalls(tris, gridInfo) {
-  const { heights, cells, cell, min } = gridInfo;
-  const heightAt = (i, j) => i >= 0 && i < cells && j >= 0 && j < cells ? heights[j][i] : 0;
-
-  for (let j = 0; j < cells; j++) {
-    for (let i = 0; i < cells; i++) {
-      const h = heightAt(i, j);
-      if (h <= 0) continue;
-
-      const x0 = min + i * cell;
-      const x1 = min + (i + 1) * cell;
-      const y0 = min + j * cell;
-      const y1 = min + (j + 1) * cell;
-
-      // South edge.
-      let nh = heightAt(i, j - 1);
-      if (h > nh) {
-        addQuad(tris, { x: x0, y: y0, z: nh }, { x: x1, y: y0, z: nh }, { x: x1, y: y0, z: h }, { x: x0, y: y0, z: h });
-      }
-
-      // North edge.
-      nh = heightAt(i, j + 1);
-      if (h > nh) {
-        addQuad(tris, { x: x0, y: y1, z: nh }, { x: x0, y: y1, z: h }, { x: x1, y: y1, z: h }, { x: x1, y: y1, z: nh });
-      }
-
-      // West edge.
-      nh = heightAt(i - 1, j);
-      if (h > nh) {
-        addQuad(tris, { x: x0, y: y0, z: nh }, { x: x0, y: y0, z: h }, { x: x0, y: y1, z: h }, { x: x0, y: y1, z: nh });
-      }
-
-      // East edge.
-      nh = heightAt(i + 1, j);
-      if (h > nh) {
-        addQuad(tris, { x: x1, y: y0, z: nh }, { x: x1, y: y1, z: nh }, { x: x1, y: y1, z: h }, { x: x1, y: y0, z: h });
-      }
-    }
+  if (shape.kind === 'disk') {
+    return extrudePolygon(circlePolygon(shape.radius, shape.segments), 0, s.thickness);
   }
+
+  if (shape.kind === 'polygon') {
+    return extrudePolygon(shape.points, 0, s.thickness);
+  }
+
+  return [];
 }
 
 function generateSTL(s) {
   const err = validate(s);
   if (err) throw new Error(err);
 
-  const gridInfo = makeGrid(s);
-  if (!gridInfo.solidCount) throw new Error('Generated mask is empty. Check the dimensions.');
-
+  const shapes = makePreviewGeometry(s);
   const tris = [];
-  greedyTopBottom(tris, gridInfo);
-  addSideWalls(tris, gridInfo);
 
-  let stl = 'solid bahtinov_mask_classic_v5_lip_mesh\n';
+  for (const shape of shapes) {
+    tris.push(...shapeTriangles(shape, s));
+  }
+
+  if (!tris.length) throw new Error('Generated mask is empty. Check the dimensions.');
+
+  let stl = 'solid bahtinov_mask_classic_v6_lip_exact\n';
   for (const tri of tris) stl += facet(tri[0], tri[1], tri[2]);
-  stl += 'endsolid bahtinov_mask_classic_v5_lip_mesh\n';
+  stl += 'endsolid bahtinov_mask_classic_v6_lip_exact\n';
 
-  return { stl, shapes: makePreviewGeometry(s), gridInfo, triCount: tris.length };
+  return { stl, shapes, triCount: tris.length };
 }
 
 function ringPath(outerR, innerR) {
@@ -573,11 +475,10 @@ function renderPreview(s) {
     }
   }
 
-  partCount.textContent = s.lipEnabled ? `single mesh + lip` : `single mesh STL`;
+  partCount.textContent = s.lipEnabled ? `exact STL + lip` : `exact STL`;
 }
 
 function renderCalculatedSummary(s) {
-  const targetCell = clamp(s.apertureDiameter / 300, 0.18, 2.5);
   calculated.innerHTML = `
     <div><strong>Printed outside diameter</strong><span>${s.outerDiameter.toFixed(1)} mm</span></div>
     <div><strong>Thickness</strong><span>${s.thickness.toFixed(1)} mm</span></div>
@@ -585,7 +486,7 @@ function renderCalculatedSummary(s) {
     <div><strong>Slats</strong><span>${s.barWidth.toFixed(1)} mm wide / ${s.pitch.toFixed(1)} mm pitch</span></div>
     <div><strong>Mounting lip</strong><span>${s.lipEnabled ? `${s.lipInnerDiameter.toFixed(1)} mm ID / ${s.lipHeight.toFixed(1)} mm tall` : 'off'}</span></div>
     <div><strong>Total height</strong><span>${s.totalHeight.toFixed(1)} mm</span></div>
-    <div><strong>STL cell size</strong><span>~${targetCell.toFixed(2)} mm</span></div>
+    <div><strong>STL type</strong><span>Exact vector mesh</span></div>
   `;
 }
 
@@ -613,7 +514,7 @@ function update() {
     renderCalculatedSummary(s);
     renderPreview(s);
     statusEl.className = 'ok';
-    statusEl.textContent = `Ready: classic v5 lip-ready single-mesh STL. ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter.`;
+    statusEl.textContent = `Ready: classic v6 lip-ready exact STL. ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter.`;
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
@@ -627,11 +528,11 @@ $('recommended').addEventListener('click', resetAutoScale);
 $('downloadStl').addEventListener('click', () => {
   try {
     const s = settings();
-    const { stl, gridInfo, triCount } = generateSTL(s);
+    const { stl, triCount } = generateSTL(s);
     const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
-    blobDownload(stl, `bahtinov-mask-classic-v5-${safeD}mm-aperture.stl`);
+    blobDownload(stl, `bahtinov-mask-classic-v6-${safeD}mm-aperture.stl`);
     statusEl.className = 'ok';
-    statusEl.textContent = `Downloaded single-mesh STL: ${gridInfo.cells} × ${gridInfo.cells} grid, ${triCount.toLocaleString()} triangles.`;
+    statusEl.textContent = `Downloaded exact STL: ${triCount.toLocaleString()} triangles.`;
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
@@ -642,7 +543,7 @@ $('downloadSvg').addEventListener('click', () => {
     update();
     const s = settings();
     const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
-    blobDownload(makeSvgText(), `bahtinov-mask-classic-v5-${safeD}mm-aperture.svg`, 'image/svg+xml');
+    blobDownload(makeSvgText(), `bahtinov-mask-classic-v6-${safeD}mm-aperture.svg`, 'image/svg+xml');
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
