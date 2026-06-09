@@ -1,20 +1,15 @@
 /*
-  Bahtinov Mask STL Generator
+  Bahtinov Mask STL Generator · Classic Layout v4
   Pure browser JavaScript. No build step. Safe for GitHub Pages.
 
-  Auto-scale mode:
-  - User enters the aperture / clear-opening diameter.
-  - All printable dimensions are calculated as percentages of that diameter.
-  - The STL outside diameter is aperture diameter + 2 * rim width.
-
-  Geometry model:
-  - Outer annular rim.
-  - Classic 3-zone Bahtinov layout:
-      * left zone = straight slats
-      * upper-right zone = diagonal slats
-      * lower-right zone = opposite diagonal slats
-  - Optional central solid hub.
-  - Every shape is extruded into an ASCII STL.
+  v4 changes:
+  - Generates the classic Bahtinov visual pattern:
+      * left half = straight horizontal slats
+      * upper-right = diagonal slats
+      * lower-right = opposite diagonal slats
+      * center = one straight divider rib
+  - STL export now uses a single watertight grid/voxel mesh instead of many overlapping solids.
+    This avoids the ugly slicer clipping/z-fighting caused by stacked internal faces.
 */
 
 const $ = (id) => document.getElementById(id);
@@ -114,7 +109,7 @@ function settings() {
     splitPointX: apertureRadius * splitPointFraction,
     hubDiameter: num(fields.hubDiameter),
     segments: Math.round(num(fields.segments) / 2) * 2,
-    overlap: clamp(apertureDiameter * 0.003, 0.25, 1.0),
+    overlap: clamp(apertureDiameter * 0.002, 0.15, 0.75),
   };
 }
 
@@ -124,7 +119,7 @@ function validate(s) {
   if (s.thickness <= 0) return 'Thickness must be greater than 0.';
   if (s.pitch <= 0) return 'Pitch must be greater than 0.';
   if (s.barWidth <= 0 || s.barWidth >= s.pitch) return 'Slat width must be greater than 0 and smaller than pitch.';
-  if (s.splitPointFraction < 0 || s.splitPointFraction > 0.45) return 'Split point position should be between 0.00 and 0.45 aperture radii.';
+  if (s.splitPointFraction < -0.35 || s.splitPointFraction > 0.35) return 'Vertical split position should be between -0.35 and 0.35 aperture radii.';
   if (s.hubDiameter < 0 || s.hubDiameter >= s.apertureDiameter) return 'Central solid disk must be smaller than the clear aperture.';
   if (s.segments < 32) return 'Circle smoothness is too low.';
   return '';
@@ -190,15 +185,6 @@ function polygonArea(poly) {
   return area / 2;
 }
 
-function clipToBox(poly, minX, maxX, minY, maxY) {
-  let out = poly.slice();
-  out = clipHalfPlane(out, 1, 0, maxX, true);   // x <= maxX
-  out = clipHalfPlane(out, 1, 0, minX, false);  // x >= minX
-  out = clipHalfPlane(out, 0, 1, maxY, true);   // y <= maxY
-  out = clipHalfPlane(out, 0, 1, minY, false);  // y >= minY
-  return out;
-}
-
 function maybeAddPolygon(list, poly, name) {
   if (poly.length >= 3 && Math.abs(polygonArea(poly)) > 0.5) {
     if (polygonArea(poly) < 0) poly.reverse();
@@ -206,12 +192,20 @@ function maybeAddPolygon(list, poly, name) {
   }
 }
 
+function clipToRect(poly, minX, maxX, minY, maxY) {
+  let out = poly.slice();
+  out = clipHalfPlane(out, 1, 0, maxX, true);
+  out = clipHalfPlane(out, 1, 0, minX, false);
+  out = clipHalfPlane(out, 0, 1, maxY, true);
+  out = clipHalfPlane(out, 0, 1, minY, false);
+  return out;
+}
+
 function makeSlatsForZone(zonePoly, zoneName, angleDeg, s, list) {
   const theta = angleDeg * Math.PI / 180;
-  // u is the long direction of the slat. n is perpendicular and sets pitch spacing.
   const nx = -Math.sin(theta);
   const ny = Math.cos(theta);
-  const maxOffset = s.apertureRadius * 1.75;
+  const maxOffset = s.apertureRadius * 1.8;
   const start = Math.floor(-maxOffset / s.pitch) - 1;
   const end = Math.ceil(maxOffset / s.pitch) + 1;
 
@@ -224,58 +218,72 @@ function makeSlatsForZone(zonePoly, zoneName, angleDeg, s, list) {
   }
 }
 
-function makeSlats(s) {
-  const clearRWithOverlap = s.apertureRadius + s.overlap;
-  const base = circlePolygon(clearRWithOverlap, s.segments);
-  const hubR = Math.max(0, s.hubDiameter / 2 - s.overlap);
-  const splitX = s.splitPointX;
-  const spineWidth = Math.max(s.barWidth * 1.15, 1.0);
-  const spineHalf = spineWidth / 2;
-  const r = clearRWithOverlap;
-  const shapes = [];
+function makePreviewGeometry(s) {
+  const err = validate(s);
+  if (err) throw new Error(err);
 
-  // Center divider. This is the vertical solid rib visible in the reference design.
+  const shapes = [];
+  const r = s.apertureRadius;
+  const base = circlePolygon(r, s.segments);
+  const splitX = s.splitPointX;
+  const dividerWidth = Math.max(s.barWidth * 1.15, 1.0);
+  const dividerHalf = dividerWidth / 2;
+
+  shapes.push({ kind: 'annulus', outerR: s.outerRadius, innerR: s.apertureRadius, segments: s.segments, name: 'outer-rim' });
+
   maybeAddPolygon(
     shapes,
-    clipToBox(base, splitX - spineHalf, splitX + spineHalf, -r, r),
-    'vertical-divider'
+    clipToRect(base, splitX - dividerHalf, splitX + dividerHalf, -r, r),
+    'center-divider'
   );
 
-  // Classic Bahtinov zones:
-  // left half = straight horizontal bars
-  // upper-right = diagonal bars one way
-  // lower-right = diagonal bars the opposite way
-  const leftZone = clipToBox(base, -r, splitX + spineHalf + s.overlap, -r, r);
-  const upperRightZone = clipToBox(base, splitX - spineHalf - s.overlap, r, 0, r);
-  const lowerRightZone = clipToBox(base, splitX - spineHalf - s.overlap, r, -r, 0);
+  const leftZone = clipToRect(base, -r, splitX - dividerHalf, -r, r);
+  const upperRightZone = clipToRect(base, splitX + dividerHalf, r, 0, r);
+  const lowerRightZone = clipToRect(base, splitX + dividerHalf, r, -r, 0);
 
   makeSlatsForZone(leftZone, 'left-horizontal', 0, s, shapes);
   makeSlatsForZone(upperRightZone, 'upper-right-diagonal', s.angleDeg, s, shapes);
   makeSlatsForZone(lowerRightZone, 'lower-right-diagonal', -s.angleDeg, s, shapes);
 
-  if (hubR > 0) {
-    // Remove slats whose centroid falls mostly inside the optional hub area.
-    return shapes.filter((shape) => {
-      if (shape.kind !== 'polygon' || !shape.points.length) return true;
-      const centroid = shape.points.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-      centroid.x /= shape.points.length;
-      centroid.y /= shape.points.length;
-      return Math.hypot(centroid.x, centroid.y) >= hubR * 0.8;
-    });
-  }
-
+  if (s.hubDiameter > 0) shapes.push({ kind: 'disk', radius: s.hubDiameter / 2, segments: s.segments, name: 'central-hub' });
   return shapes;
 }
 
-function makeGeometry(s) {
-  const err = validate(s);
-  if (err) throw new Error(err);
+function band(distance, pitch, width) {
+  const wrapped = ((distance + pitch / 2) % pitch + pitch) % pitch - pitch / 2;
+  return Math.abs(wrapped) <= width / 2;
+}
 
-  const shapes = [];
-  shapes.push({ kind: 'annulus', outerR: s.outerRadius, innerR: s.apertureRadius, segments: s.segments, name: 'outer-rim' });
-  shapes.push(...makeSlats(s));
-  if (s.hubDiameter > 0) shapes.push({ kind: 'disk', radius: s.hubDiameter / 2, segments: s.segments, name: 'central-hub' });
-  return shapes;
+function pointIsSolid(x, y, s) {
+  const r = Math.hypot(x, y);
+  if (r > s.outerRadius) return false;
+
+  // Outer ring.
+  if (r >= s.apertureRadius) return true;
+
+  // Optional central obstruction/hub.
+  if (s.hubDiameter > 0 && r <= s.hubDiameter / 2) return true;
+
+  const splitX = s.splitPointX;
+  const dividerWidth = Math.max(s.barWidth * 1.15, 1.0);
+  const dividerHalf = dividerWidth / 2;
+
+  // Center divider rib.
+  if (Math.abs(x - splitX) <= dividerHalf) return true;
+
+  // Classic mask zones.
+  if (x < splitX - dividerHalf) {
+    return band(y, s.pitch, s.barWidth); // left straight horizontal slats
+  }
+
+  if (x > splitX + dividerHalf) {
+    const theta = (y >= 0 ? s.angleDeg : -s.angleDeg) * Math.PI / 180;
+    const nx = -Math.sin(theta);
+    const ny = Math.cos(theta);
+    return band(nx * x + ny * y, s.pitch, s.barWidth);
+  }
+
+  return false;
 }
 
 function normal(a, b, c) {
@@ -294,74 +302,164 @@ function facet(a, b, c) {
   return `  facet normal ${f(n.x)} ${f(n.y)} ${f(n.z)}\n    outer loop\n      vertex ${f(a.x)} ${f(a.y)} ${f(a.z)}\n      vertex ${f(b.x)} ${f(b.y)} ${f(b.z)}\n      vertex ${f(c.x)} ${f(c.y)} ${f(c.z)}\n    endloop\n  endfacet\n`;
 }
 
-function extrudePolygon(poly, thickness) {
-  const tris = [];
-  const z0 = 0, z1 = thickness;
-  // bottom face
-  for (let i = 1; i < poly.length - 1; i++) {
-    tris.push([{ ...poly[0], z: z0 }, { ...poly[i + 1], z: z0 }, { ...poly[i], z: z0 }]);
-  }
-  // top face
-  for (let i = 1; i < poly.length - 1; i++) {
-    tris.push([{ ...poly[0], z: z1 }, { ...poly[i], z: z1 }, { ...poly[i + 1], z: z1 }]);
-  }
-  // side walls
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i];
-    const b = poly[(i + 1) % poly.length];
-    tris.push([{ ...a, z: z0 }, { ...b, z: z0 }, { ...b, z: z1 }]);
-    tris.push([{ ...a, z: z0 }, { ...b, z: z1 }, { ...a, z: z1 }]);
-  }
-  return tris;
+function addQuad(tris, a, b, c, d) {
+  tris.push([a, b, c]);
+  tris.push([a, c, d]);
 }
 
-function annulusTriangles(outerR, innerR, segments, thickness) {
-  const tris = [];
-  const z0 = 0, z1 = thickness;
-  for (let i = 0; i < segments; i++) {
-    const a0 = i / segments * Math.PI * 2;
-    const a1 = (i + 1) / segments * Math.PI * 2;
-    const po0 = { x: Math.cos(a0) * outerR, y: Math.sin(a0) * outerR };
-    const po1 = { x: Math.cos(a1) * outerR, y: Math.sin(a1) * outerR };
-    const pi0 = { x: Math.cos(a0) * innerR, y: Math.sin(a0) * innerR };
-    const pi1 = { x: Math.cos(a1) * innerR, y: Math.sin(a1) * innerR };
+function makeGrid(s) {
+  const targetCell = clamp(s.apertureDiameter / 300, 0.18, 2.5);
+  const cells = Math.max(48, Math.ceil(s.outerDiameter / targetCell));
+  const cell = s.outerDiameter / cells;
+  const min = -s.outerRadius;
+  const grid = Array.from({ length: cells }, () => new Uint8Array(cells));
+  let solidCount = 0;
 
-    // top annular face
-    tris.push([{ ...po0, z: z1 }, { ...po1, z: z1 }, { ...pi1, z: z1 }]);
-    tris.push([{ ...po0, z: z1 }, { ...pi1, z: z1 }, { ...pi0, z: z1 }]);
-    // bottom annular face
-    tris.push([{ ...po0, z: z0 }, { ...pi1, z: z0 }, { ...po1, z: z0 }]);
-    tris.push([{ ...po0, z: z0 }, { ...pi0, z: z0 }, { ...pi1, z: z0 }]);
-    // outer wall
-    tris.push([{ ...po0, z: z0 }, { ...po1, z: z0 }, { ...po1, z: z1 }]);
-    tris.push([{ ...po0, z: z0 }, { ...po1, z: z1 }, { ...po0, z: z1 }]);
-    // inner wall
-    tris.push([{ ...pi0, z: z0 }, { ...pi1, z: z1 }, { ...pi1, z: z0 }]);
-    tris.push([{ ...pi0, z: z0 }, { ...pi0, z: z1 }, { ...pi1, z: z1 }]);
+  for (let j = 0; j < cells; j++) {
+    const y = min + (j + 0.5) * cell;
+    for (let i = 0; i < cells; i++) {
+      const x = min + (i + 0.5) * cell;
+      if (pointIsSolid(x, y, s)) {
+        grid[j][i] = 1;
+        solidCount++;
+      }
+    }
   }
-  return tris;
+
+  return { grid, cells, cell, min, solidCount };
 }
 
-function shapeTriangles(shape, thickness) {
-  if (shape.kind === 'polygon') return extrudePolygon(shape.points, thickness);
-  if (shape.kind === 'disk') return extrudePolygon(circlePolygon(shape.radius, shape.segments), thickness);
-  if (shape.kind === 'annulus') return annulusTriangles(shape.outerR, shape.innerR, shape.segments, thickness);
-  return [];
+function greedyTopBottom(tris, gridInfo, thickness) {
+  const { grid, cells, cell, min } = gridInfo;
+  const visited = Array.from({ length: cells }, () => new Uint8Array(cells));
+
+  for (let j = 0; j < cells; j++) {
+    for (let i = 0; i < cells; i++) {
+      if (!grid[j][i] || visited[j][i]) continue;
+
+      let w = 1;
+      while (i + w < cells && grid[j][i + w] && !visited[j][i + w]) w++;
+
+      let h = 1;
+      let canGrow = true;
+      while (j + h < cells && canGrow) {
+        for (let x = i; x < i + w; x++) {
+          if (!grid[j + h][x] || visited[j + h][x]) {
+            canGrow = false;
+            break;
+          }
+        }
+        if (canGrow) h++;
+      }
+
+      for (let yy = j; yy < j + h; yy++) {
+        for (let xx = i; xx < i + w; xx++) visited[yy][xx] = 1;
+      }
+
+      const x0 = min + i * cell;
+      const x1 = min + (i + w) * cell;
+      const y0 = min + j * cell;
+      const y1 = min + (j + h) * cell;
+
+      // Top face, normal +Z.
+      addQuad(
+        tris,
+        { x: x0, y: y0, z: thickness },
+        { x: x1, y: y0, z: thickness },
+        { x: x1, y: y1, z: thickness },
+        { x: x0, y: y1, z: thickness }
+      );
+
+      // Bottom face, normal -Z.
+      addQuad(
+        tris,
+        { x: x0, y: y0, z: 0 },
+        { x: x0, y: y1, z: 0 },
+        { x: x1, y: y1, z: 0 },
+        { x: x1, y: y0, z: 0 }
+      );
+    }
+  }
+}
+
+function addSideWalls(tris, gridInfo, thickness) {
+  const { grid, cells, cell, min } = gridInfo;
+  const solid = (i, j) => i >= 0 && i < cells && j >= 0 && j < cells && grid[j][i];
+
+  // South/north edges, merge along X.
+  for (let j = 0; j < cells; j++) {
+    let i = 0;
+    while (i < cells) {
+      if (solid(i, j) && !solid(i, j - 1)) {
+        const start = i;
+        while (i < cells && solid(i, j) && !solid(i, j - 1)) i++;
+        const x0 = min + start * cell;
+        const x1 = min + i * cell;
+        const y = min + j * cell;
+        addQuad(tris, { x: x0, y, z: 0 }, { x: x1, y, z: 0 }, { x: x1, y, z: thickness }, { x: x0, y, z: thickness });
+      } else i++;
+    }
+
+    i = 0;
+    while (i < cells) {
+      if (solid(i, j) && !solid(i, j + 1)) {
+        const start = i;
+        while (i < cells && solid(i, j) && !solid(i, j + 1)) i++;
+        const x0 = min + start * cell;
+        const x1 = min + i * cell;
+        const y = min + (j + 1) * cell;
+        addQuad(tris, { x: x0, y, z: 0 }, { x: x0, y, z: thickness }, { x: x1, y, z: thickness }, { x: x1, y, z: 0 });
+      } else i++;
+    }
+  }
+
+  // West/east edges, merge along Y.
+  for (let i = 0; i < cells; i++) {
+    let j = 0;
+    while (j < cells) {
+      if (solid(i, j) && !solid(i - 1, j)) {
+        const start = j;
+        while (j < cells && solid(i, j) && !solid(i - 1, j)) j++;
+        const y0 = min + start * cell;
+        const y1 = min + j * cell;
+        const x = min + i * cell;
+        addQuad(tris, { x, y: y0, z: 0 }, { x, y: y0, z: thickness }, { x, y: y1, z: thickness }, { x, y: y1, z: 0 });
+      } else j++;
+    }
+
+    j = 0;
+    while (j < cells) {
+      if (solid(i, j) && !solid(i + 1, j)) {
+        const start = j;
+        while (j < cells && solid(i, j) && !solid(i + 1, j)) j++;
+        const y0 = min + start * cell;
+        const y1 = min + j * cell;
+        const x = min + (i + 1) * cell;
+        addQuad(tris, { x, y: y0, z: 0 }, { x, y: y1, z: 0 }, { x, y: y1, z: thickness }, { x, y: y0, z: thickness });
+      } else j++;
+    }
+  }
 }
 
 function generateSTL(s) {
-  const shapes = makeGeometry(s);
-  let stl = 'solid bahtinov_mask\n';
-  for (const shape of shapes) {
-    const tris = shapeTriangles(shape, s.thickness);
-    for (const tri of tris) stl += facet(tri[0], tri[1], tri[2]);
-  }
-  stl += 'endsolid bahtinov_mask\n';
-  return { stl, shapes };
+  const err = validate(s);
+  if (err) throw new Error(err);
+
+  const gridInfo = makeGrid(s);
+  if (!gridInfo.solidCount) throw new Error('Generated mask is empty. Check the dimensions.');
+
+  const tris = [];
+  greedyTopBottom(tris, gridInfo, s.thickness);
+  addSideWalls(tris, gridInfo, s.thickness);
+
+  let stl = 'solid bahtinov_mask_classic_v4_single_mesh\n';
+  for (const tri of tris) stl += facet(tri[0], tri[1], tri[2]);
+  stl += 'endsolid bahtinov_mask_classic_v4_single_mesh\n';
+
+  return { stl, shapes: makePreviewGeometry(s), gridInfo, triCount: tris.length };
 }
 
 function ringPath(outerR, innerR) {
-  // SVG even-odd compound path. Approximate via arcs.
   return [
     `M ${outerR} 0`,
     `A ${outerR} ${outerR} 0 1 1 ${-outerR} 0`,
@@ -378,7 +476,7 @@ function polygonPoints(poly) {
 }
 
 function renderPreview(s) {
-  const shapes = makeGeometry(s);
+  const shapes = makePreviewGeometry(s);
   const pad = s.outerRadius * 0.08;
   preview.setAttribute('viewBox', `${-s.outerRadius - pad} ${-s.outerRadius - pad} ${(s.outerRadius + pad) * 2} ${(s.outerRadius + pad) * 2}`);
   preview.innerHTML = '';
@@ -407,15 +505,17 @@ function renderPreview(s) {
     }
   }
 
-  partCount.textContent = `${shapes.length} parts`;
+  partCount.textContent = `single mesh STL`;
 }
 
 function renderCalculatedSummary(s) {
+  const targetCell = clamp(s.apertureDiameter / 300, 0.18, 2.5);
   calculated.innerHTML = `
     <div><strong>Printed outside diameter</strong><span>${s.outerDiameter.toFixed(1)} mm</span></div>
     <div><strong>Thickness</strong><span>${s.thickness.toFixed(1)} mm</span></div>
     <div><strong>Rim</strong><span>${s.rimWidth.toFixed(1)} mm</span></div>
     <div><strong>Slats</strong><span>${s.barWidth.toFixed(1)} mm wide / ${s.pitch.toFixed(1)} mm pitch</span></div>
+    <div><strong>STL cell size</strong><span>~${targetCell.toFixed(2)} mm</span></div>
   `;
 }
 
@@ -443,7 +543,7 @@ function update() {
     renderCalculatedSummary(s);
     renderPreview(s);
     statusEl.className = 'ok';
-    statusEl.textContent = `Ready: ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter, ${s.thickness.toFixed(1)} mm thick.`;
+    statusEl.textContent = `Ready: classic v4 single-mesh STL. ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter.`;
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
@@ -456,11 +556,11 @@ $('recommended').addEventListener('click', resetAutoScale);
 $('downloadStl').addEventListener('click', () => {
   try {
     const s = settings();
-    const { stl, shapes } = generateSTL(s);
+    const { stl, gridInfo, triCount } = generateSTL(s);
     const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
-    blobDownload(stl, `bahtinov-mask-${safeD}mm-aperture.stl`);
+    blobDownload(stl, `bahtinov-mask-classic-v4-${safeD}mm-aperture.stl`);
     statusEl.className = 'ok';
-    statusEl.textContent = `Downloaded STL with ${shapes.length} solid parts.`;
+    statusEl.textContent = `Downloaded single-mesh STL: ${gridInfo.cells} × ${gridInfo.cells} grid, ${triCount.toLocaleString()} triangles.`;
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
@@ -471,7 +571,7 @@ $('downloadSvg').addEventListener('click', () => {
     update();
     const s = settings();
     const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
-    blobDownload(makeSvgText(), `bahtinov-mask-${safeD}mm-aperture.svg`, 'image/svg+xml');
+    blobDownload(makeSvgText(), `bahtinov-mask-classic-v4-${safeD}mm-aperture.svg`, 'image/svg+xml');
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
