@@ -4,17 +4,25 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
 
 ## Features
 
-- Enter any aperture diameter in millimeters.
-- Tune thickness, rim width, slat pitch, slat width, diagonal angle, center section width, and optional central hub.
+- Enter one aperture / clear-opening diameter in millimeters.
+- Automatically scales the printed thickness, outer rim, slat pitch, slat width, and circle smoothness from that diameter.
+- Shows the calculated printed outside diameter.
+- Optional advanced/manual override mode for fine tuning.
 - Live SVG preview.
 - Download STL for slicing.
 - Download SVG for reference or laser/CNC workflows.
 - Runs entirely in the browser.
 
+## How the diameter works
+
+The main input is the clear aperture/opening diameter. The generated part will be larger than that because the app adds an outer rim.
+
+Example: a 100 mm aperture with a 6 mm rim produces a printed outside diameter of 112 mm.
+
 ## GitHub Pages setup
 
 1. Create a new GitHub repository.
-2. Upload `index.html`, `styles.css`, and `script.js` to the repository root.
+2. Upload `index.html`, `styles.css`, `script.js`, and `.nojekyll` to the repository root.
 3. In GitHub, go to **Settings → Pages**.
 4. Under **Build and deployment**, select **Deploy from a branch**.
 5. Select your main branch and `/root`, then save.
@@ -29,4 +37,4 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
 
 ## Important caveat
 
-This generator makes a practical Bahtinov-style mask, not a fully optical-theory-optimized mask. The default values should work for general focusing, but serious astrophotography users may want to experiment with pitch, slat width, and angle for their focal length and camera setup.
+This generator makes a practical Bahtinov-style mask, not a fully optical-theory-optimized mask. The automatic values should work for general focusing, but serious astrophotography users may want to experiment with pitch, slat width, and angle for their focal length and camera setup.

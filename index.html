@@ -11,7 +11,7 @@
     <div>
       <p class="eyebrow">Static GitHub Pages App</p>
       <h1>Bahtinov Mask STL Generator</h1>
-      <p class="lede">Enter your aperture diameter in millimeters, tune the mask, then download a printable STL. Everything runs locally in your browser.</p>
+      <p class="lede">Enter one aperture diameter in millimeters and the generator automatically scales the rim, slats, thickness, spacing, and STL detail. Everything runs locally in your browser.</p>
     </div>
   </header>
 
@@ -19,63 +19,75 @@
     <section class="panel controls" aria-labelledby="settings-title">
       <div class="panel-head">
         <h2 id="settings-title">Mask settings</h2>
-        <button id="recommended" type="button">Auto settings</button>
+        <button id="recommended" type="button">Reset auto-scale</button>
       </div>
 
       <form id="maskForm">
         <label>
-          <span>Aperture diameter</span>
+          <span>Aperture / clear opening diameter</span>
           <input id="diameter" type="number" min="20" max="2000" step="0.1" value="100" />
-          <small>Clear opening / telescope objective diameter in mm.</small>
+          <small>This is the clear opening that covers your telescope/lens aperture. The printed outside diameter is calculated larger to include the rim.</small>
         </label>
 
-        <label>
-          <span>Mask thickness</span>
-          <input id="thickness" type="number" min="0.4" max="20" step="0.1" value="2" />
-          <small>Typical 3D print: 1.6–3 mm.</small>
+        <label class="checkline">
+          <input id="autoScale" type="checkbox" checked />
+          <span>Auto-scale all geometry from diameter</span>
         </label>
 
-        <label>
-          <span>Outer rim width</span>
-          <input id="rimWidth" type="number" min="1" max="100" step="0.1" value="5" />
-          <small>Solid ring around the edge.</small>
-        </label>
+        <div id="calculated" class="calculated" aria-live="polite"></div>
 
-        <label>
-          <span>Slat pitch</span>
-          <input id="pitch" type="number" min="1" max="100" step="0.1" value="6" />
-          <small>Center-to-center spacing between solid slats.</small>
-        </label>
+        <details class="advanced">
+          <summary>Advanced values / manual override</summary>
+          <p class="advanced-note">With auto-scale enabled, these values are calculated from the aperture diameter. Uncheck auto-scale if you want to manually tweak the mask.</p>
 
-        <label>
-          <span>Slat width</span>
-          <input id="barWidth" type="number" min="0.4" max="50" step="0.1" value="2.4" />
-          <small>Solid plastic width. Keep below pitch.</small>
-        </label>
+          <label>
+            <span>Mask thickness</span>
+            <input id="thickness" type="number" min="0.4" max="20" step="0.1" value="2" />
+            <small>3D printed plate thickness in mm.</small>
+          </label>
 
-        <label>
-          <span>Diagonal slat angle</span>
-          <input id="angle" type="number" min="5" max="45" step="1" value="20" />
-          <small>Classic Bahtinov masks commonly use shallow opposing diagonals.</small>
-        </label>
+          <label>
+            <span>Outer rim width</span>
+            <input id="rimWidth" type="number" min="1" max="100" step="0.1" value="5" />
+            <small>Solid ring added outside the clear aperture.</small>
+          </label>
 
-        <label>
-          <span>Center section width</span>
-          <input id="centerFraction" type="number" min="0.15" max="0.70" step="0.01" value="0.34" />
-          <small>Fraction of aperture used by the straight center slats.</small>
-        </label>
+          <label>
+            <span>Slat pitch</span>
+            <input id="pitch" type="number" min="1" max="100" step="0.1" value="6" />
+            <small>Center-to-center spacing between solid slats.</small>
+          </label>
 
-        <label>
-          <span>Central solid disk</span>
-          <input id="hubDiameter" type="number" min="0" max="1000" step="0.1" value="0" />
-          <small>Optional, in mm. Use 0 for none.</small>
-        </label>
+          <label>
+            <span>Slat width</span>
+            <input id="barWidth" type="number" min="0.4" max="50" step="0.1" value="2.4" />
+            <small>Solid plastic width. Keep below pitch.</small>
+          </label>
 
-        <label>
-          <span>Circle smoothness</span>
-          <input id="segments" type="number" min="64" max="512" step="16" value="192" />
-          <small>Higher = smoother ring, larger STL.</small>
-        </label>
+          <label>
+            <span>Diagonal slat angle</span>
+            <input id="angle" type="number" min="5" max="45" step="1" value="20" />
+            <small>Angle is not a length, so auto-scale keeps it at a sensible default.</small>
+          </label>
+
+          <label>
+            <span>Center section width</span>
+            <input id="centerFraction" type="number" min="0.15" max="0.70" step="0.01" value="0.34" />
+            <small>Fraction of the aperture width used by the straight center slats.</small>
+          </label>
+
+          <label>
+            <span>Central solid disk</span>
+            <input id="hubDiameter" type="number" min="0" max="1000" step="0.1" value="0" />
+            <small>Optional central obstruction/hub in mm. Auto-scale uses 0 because it cannot know your telescope obstruction size.</small>
+          </label>
+
+          <label>
+            <span>Circle smoothness</span>
+            <input id="segments" type="number" min="64" max="512" step="16" value="192" />
+            <small>Higher = smoother ring, larger STL.</small>
+          </label>
+        </details>
       </form>
 
       <div class="actions">

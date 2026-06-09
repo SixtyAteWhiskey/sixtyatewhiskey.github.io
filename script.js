@@ -2,6 +2,11 @@
   Bahtinov Mask STL Generator
   Pure browser JavaScript. No build step. Safe for GitHub Pages.
 
+  Auto-scale mode:
+  - User enters the aperture / clear-opening diameter.
+  - All printable dimensions are calculated as percentages of that diameter.
+  - The STL outside diameter is aperture diameter + 2 * rim width.
+
   Geometry model:
   - Outer annular rim.
   - Solid slats clipped into three Bahtinov zones.
@@ -23,55 +28,100 @@ const fields = {
   segments: $('segments'),
 };
 
+const autoScale = $('autoScale');
+const calculated = $('calculated');
 const preview = $('preview');
 const partCount = $('partCount');
 const statusEl = $('status');
+const scalableFieldKeys = ['thickness', 'rimWidth', 'pitch', 'barWidth', 'angle', 'centerFraction', 'hubDiameter', 'segments'];
 
 function num(field) {
   return Number(field.value);
-}
-
-function settings() {
-  const d = num(fields.diameter);
-  return {
-    diameter: d,
-    radius: d / 2,
-    thickness: num(fields.thickness),
-    rimWidth: num(fields.rimWidth),
-    pitch: num(fields.pitch),
-    barWidth: num(fields.barWidth),
-    angleDeg: num(fields.angle),
-    centerFraction: num(fields.centerFraction),
-    hubDiameter: num(fields.hubDiameter),
-    segments: Math.round(num(fields.segments) / 2) * 2,
-    overlap: 0.25,
-  };
 }
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-function applyRecommended() {
-  const d = clamp(num(fields.diameter) || 100, 20, 2000);
-  const pitch = clamp(d * 0.055, 3.0, 12.0);
-  fields.thickness.value = d < 80 ? 1.6 : 2.0;
-  fields.rimWidth.value = clamp(d * 0.055, 3.0, 14.0).toFixed(1);
-  fields.pitch.value = pitch.toFixed(1);
-  fields.barWidth.value = clamp(pitch * 0.42, 1.2, 5.0).toFixed(1);
-  fields.angle.value = 20;
-  fields.centerFraction.value = 0.34;
-  fields.segments.value = d > 250 ? 256 : 192;
+function roundTo(value, decimals = 1) {
+  return Number(value).toFixed(decimals);
+}
+
+function autoDimensions(apertureDiameter) {
+  const d = clamp(Number(apertureDiameter) || 100, 20, 2000);
+  const pitch = clamp(d * 0.055, 3.0, 14.0);
+  const barWidth = clamp(pitch * 0.42, 1.2, 5.8);
+
+  return {
+    thickness: clamp(d * 0.018, 1.6, 3.6),
+    rimWidth: clamp(d * 0.060, 4.0, 20.0),
+    pitch,
+    barWidth,
+    angle: 20,
+    centerFraction: 0.34,
+    hubDiameter: 0,
+    segments: d > 400 ? 384 : d > 225 ? 320 : d > 125 ? 256 : 192,
+  };
+}
+
+function writeAutoDimensions() {
+  const auto = autoDimensions(num(fields.diameter));
+  fields.thickness.value = roundTo(auto.thickness, 1);
+  fields.rimWidth.value = roundTo(auto.rimWidth, 1);
+  fields.pitch.value = roundTo(auto.pitch, 1);
+  fields.barWidth.value = roundTo(auto.barWidth, 1);
+  fields.angle.value = auto.angle;
+  fields.centerFraction.value = auto.centerFraction.toFixed(2);
+  fields.hubDiameter.value = roundTo(auto.hubDiameter, 1);
+  fields.segments.value = auto.segments;
+}
+
+function setAutoScaleUi() {
+  const locked = autoScale.checked;
+  for (const key of scalableFieldKeys) fields[key].disabled = locked;
+}
+
+function resetAutoScale() {
+  autoScale.checked = true;
+  writeAutoDimensions();
+  setAutoScaleUi();
   update();
 }
 
+function settings() {
+  if (autoScale.checked) writeAutoDimensions();
+
+  const apertureDiameter = num(fields.diameter);
+  const rimWidth = num(fields.rimWidth);
+  const apertureRadius = apertureDiameter / 2;
+  const outerRadius = apertureRadius + rimWidth;
+
+  return {
+    apertureDiameter,
+    apertureRadius,
+    outerRadius,
+    outerDiameter: outerRadius * 2,
+    thickness: num(fields.thickness),
+    rimWidth,
+    pitch: num(fields.pitch),
+    barWidth: num(fields.barWidth),
+    angleDeg: num(fields.angle),
+    centerFraction: num(fields.centerFraction),
+    hubDiameter: num(fields.hubDiameter),
+    segments: Math.round(num(fields.segments) / 2) * 2,
+    overlap: clamp(apertureDiameter * 0.003, 0.25, 1.0),
+  };
+}
+
 function validate(s) {
-  if (!Number.isFinite(s.diameter) || s.diameter <= 0) return 'Diameter must be greater than 0.';
-  if (s.rimWidth <= 0 || s.rimWidth >= s.radius * 0.45) return 'Rim width should be positive and less than about 45% of the radius.';
+  if (!Number.isFinite(s.apertureDiameter) || s.apertureDiameter <= 0) return 'Aperture diameter must be greater than 0.';
+  if (s.rimWidth <= 0 || s.rimWidth >= s.apertureDiameter * 0.35) return 'Rim width should be positive and less than about 35% of the aperture diameter.';
   if (s.thickness <= 0) return 'Thickness must be greater than 0.';
   if (s.pitch <= 0) return 'Pitch must be greater than 0.';
   if (s.barWidth <= 0 || s.barWidth >= s.pitch) return 'Slat width must be greater than 0 and smaller than pitch.';
-  if (s.hubDiameter < 0 || s.hubDiameter >= s.diameter - 2 * s.rimWidth) return 'Central solid disk must be smaller than the clear inner opening.';
+  if (s.centerFraction <= 0 || s.centerFraction >= 1) return 'Center section width must be a fraction between 0 and 1.';
+  if (s.hubDiameter < 0 || s.hubDiameter >= s.apertureDiameter) return 'Central solid disk must be smaller than the clear aperture.';
+  if (s.segments < 32) return 'Circle smoothness is too low.';
   return '';
 }
 
@@ -136,14 +186,14 @@ function polygonArea(poly) {
 }
 
 function makeSlats(s) {
-  const innerR = s.radius - s.rimWidth + s.overlap;
-  const base = circlePolygon(innerR, s.segments);
-  const centerHalfWidth = s.radius * s.centerFraction / 2;
+  const clearRWithOverlap = s.apertureRadius + s.overlap;
+  const base = circlePolygon(clearRWithOverlap, s.segments);
+  const centerHalfWidth = s.apertureDiameter * s.centerFraction / 2;
   const hubR = Math.max(0, s.hubDiameter / 2 - s.overlap);
   const zones = [
-    { name: 'left', minX: -innerR, maxX: -centerHalfWidth, angle: s.angleDeg },
+    { name: 'left', minX: -clearRWithOverlap, maxX: -centerHalfWidth, angle: s.angleDeg },
     { name: 'center', minX: -centerHalfWidth, maxX: centerHalfWidth, angle: 90 },
-    { name: 'right', minX: centerHalfWidth, maxX: innerR, angle: -s.angleDeg },
+    { name: 'right', minX: centerHalfWidth, maxX: clearRWithOverlap, angle: -s.angleDeg },
   ];
 
   const slats = [];
@@ -152,7 +202,7 @@ function makeSlats(s) {
     // u is the long direction of the slat. n is perpendicular and sets pitch spacing.
     const nx = -Math.sin(theta);
     const ny = Math.cos(theta);
-    const maxOffset = innerR * 1.5;
+    const maxOffset = clearRWithOverlap * 1.5;
     const start = Math.floor(-maxOffset / s.pitch) - 1;
     const end = Math.ceil(maxOffset / s.pitch) + 1;
 
@@ -166,8 +216,7 @@ function makeSlats(s) {
 
       if (hubR > 0) {
         // Keep slats out of the optional hub area when possible to reduce duplicate geometry.
-        // This is an approximation using four tangent-ish cuts, not a true circular boolean.
-        // The hub itself is added as a solid disk.
+        // This is an approximation using the polygon centroid, not a true circular boolean.
         const centroid = poly.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
         if (poly.length) {
           centroid.x /= poly.length; centroid.y /= poly.length;
@@ -188,9 +237,8 @@ function makeGeometry(s) {
   const err = validate(s);
   if (err) throw new Error(err);
 
-  const innerR = s.radius - s.rimWidth;
   const shapes = [];
-  shapes.push({ kind: 'annulus', outerR: s.radius, innerR, segments: s.segments, name: 'outer-rim' });
+  shapes.push({ kind: 'annulus', outerR: s.outerRadius, innerR: s.apertureRadius, segments: s.segments, name: 'outer-rim' });
   shapes.push(...makeSlats(s));
   if (s.hubDiameter > 0) shapes.push({ kind: 'disk', radius: s.hubDiameter / 2, segments: s.segments, name: 'central-hub' });
   return shapes;
@@ -297,14 +345,14 @@ function polygonPoints(poly) {
 
 function renderPreview(s) {
   const shapes = makeGeometry(s);
-  const pad = s.radius * 0.08;
-  preview.setAttribute('viewBox', `${-s.radius - pad} ${-s.radius - pad} ${(s.radius + pad) * 2} ${(s.radius + pad) * 2}`);
+  const pad = s.outerRadius * 0.08;
+  preview.setAttribute('viewBox', `${-s.outerRadius - pad} ${-s.outerRadius - pad} ${(s.outerRadius + pad) * 2} ${(s.outerRadius + pad) * 2}`);
   preview.innerHTML = '';
 
-  const bg = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  bg.setAttribute('cx', '0'); bg.setAttribute('cy', '0'); bg.setAttribute('r', s.radius.toString());
-  bg.setAttribute('fill', 'rgba(255,255,255,0.035)');
-  preview.appendChild(bg);
+  const aperture = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  aperture.setAttribute('cx', '0'); aperture.setAttribute('cy', '0'); aperture.setAttribute('r', s.apertureRadius.toString());
+  aperture.setAttribute('fill', 'rgba(255,255,255,0.035)');
+  preview.appendChild(aperture);
 
   for (const shape of shapes) {
     if (shape.kind === 'annulus') {
@@ -328,6 +376,15 @@ function renderPreview(s) {
   partCount.textContent = `${shapes.length} parts`;
 }
 
+function renderCalculatedSummary(s) {
+  calculated.innerHTML = `
+    <div><strong>Printed outside diameter</strong><span>${s.outerDiameter.toFixed(1)} mm</span></div>
+    <div><strong>Thickness</strong><span>${s.thickness.toFixed(1)} mm</span></div>
+    <div><strong>Rim</strong><span>${s.rimWidth.toFixed(1)} mm</span></div>
+    <div><strong>Slats</strong><span>${s.barWidth.toFixed(1)} mm wide / ${s.pitch.toFixed(1)} mm pitch</span></div>
+  `;
+}
+
 function blobDownload(text, filename, type = 'application/sla') {
   const blob = new Blob([text], { type });
   const url = URL.createObjectURL(blob);
@@ -347,10 +404,12 @@ function makeSvgText() {
 
 function update() {
   try {
+    setAutoScaleUi();
     const s = settings();
+    renderCalculatedSummary(s);
     renderPreview(s);
     statusEl.className = 'ok';
-    statusEl.textContent = `Ready: ${s.diameter.toFixed(1)} mm diameter, ${s.thickness.toFixed(1)} mm thick.`;
+    statusEl.textContent = `Ready: ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter, ${s.thickness.toFixed(1)} mm thick.`;
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
@@ -358,13 +417,14 @@ function update() {
 }
 
 for (const input of Object.values(fields)) input.addEventListener('input', update);
-$('recommended').addEventListener('click', applyRecommended);
+autoScale.addEventListener('change', update);
+$('recommended').addEventListener('click', resetAutoScale);
 $('downloadStl').addEventListener('click', () => {
   try {
     const s = settings();
     const { stl, shapes } = generateSTL(s);
-    const safeD = String(s.diameter).replace(/[^0-9.]/g, '_');
-    blobDownload(stl, `bahtinov-mask-${safeD}mm.stl`);
+    const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
+    blobDownload(stl, `bahtinov-mask-${safeD}mm-aperture.stl`);
     statusEl.className = 'ok';
     statusEl.textContent = `Downloaded STL with ${shapes.length} solid parts.`;
   } catch (err) {
@@ -376,12 +436,12 @@ $('downloadSvg').addEventListener('click', () => {
   try {
     update();
     const s = settings();
-    const safeD = String(s.diameter).replace(/[^0-9.]/g, '_');
-    blobDownload(makeSvgText(), `bahtinov-mask-${safeD}mm.svg`, 'image/svg+xml');
+    const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
+    blobDownload(makeSvgText(), `bahtinov-mask-${safeD}mm-aperture.svg`, 'image/svg+xml');
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
   }
 });
 
-update();
+resetAutoScale();
