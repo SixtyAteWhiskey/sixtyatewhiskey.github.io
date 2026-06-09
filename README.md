@@ -5,7 +5,7 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
 ## Features
 
 - Enter one aperture / clear-opening diameter in millimeters.
-- Automatically scales the printed thickness, outer rim, slat pitch, slat width, and preview smoothness from that diameter.
+- Automatically scales the printed thickness, outer rim, slat pitch, slat width, optional mounting lip, and preview smoothness from that diameter.
 - Generates a classic Bahtinov layout:
   - left half: straight horizontal slats
   - upper-right: diagonal slats
@@ -13,7 +13,8 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
   - center: a single straight divider rib
 - Exports the STL as a single grid/voxel-style watertight mesh to avoid slicer clipping from overlapping solids.
 - Shows the calculated printed outside diameter.
-- Optional advanced/manual override mode for fine tuning, including the center divider position.
+- Optional mounting lip/skirt so the mask can sit over a lens or dew shield.
+- Optional advanced/manual override mode for fine tuning, including the center divider position and lip dimensions.
 - Live SVG preview.
 - Download STL for slicing.
 - Download SVG for reference or laser/CNC workflows.
@@ -24,6 +25,12 @@ A static browser-based Bahtinov mask generator that exports printable STL files.
 The main input is the clear aperture/opening diameter. The generated part will be larger than that because the app adds an outer rim.
 
 Example: a 100 mm aperture with a 6 mm rim produces a printed outside diameter of 112 mm.
+
+If the mounting lip is enabled, the lip inner diameter is calculated as:
+
+`lip inner diameter = aperture diameter + lip clearance`
+
+So for a 100 mm lens/dew-shield opening with 0.6 mm clearance, the lip ID is 100.6 mm.
 
 ## GitHub Pages setup
 
@@ -38,6 +45,7 @@ Example: a 100 mm aperture with a 6 mm rim produces a printed outside diameter o
 
 - The STL is generated as one mesh, not a pile of overlapping rectangles. This should import much cleaner in Bambu Studio, OrcaSlicer, PrusaSlicer, and similar tools.
 - The STL mesh is intentionally grid-based. That makes the edges slightly stair-stepped at high zoom, but it avoids non-manifold clipping artifacts.
+- The lip prints as a raised wall on the rim; use the lip side against the lens/dew shield after printing.
 - For thin masks, print slowly and use enough perimeters. PETG, ASA, PLA+, or PC blends are good candidates depending on outdoor/heat exposure.
 
 ## Important caveat

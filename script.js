@@ -1,15 +1,16 @@
 /*
-  Bahtinov Mask STL Generator · Classic Layout v4
+  Bahtinov Mask STL Generator · Classic Layout v5
   Pure browser JavaScript. No build step. Safe for GitHub Pages.
 
-  v4 changes:
+  v5 changes:
   - Generates the classic Bahtinov visual pattern:
       * left half = straight horizontal slats
       * upper-right = diagonal slats
       * lower-right = opposite diagonal slats
       * center = one straight divider rib
-  - STL export now uses a single watertight grid/voxel mesh instead of many overlapping solids.
+  - STL export uses a single heightfield mesh instead of overlapping solids.
     This avoids the ugly slicer clipping/z-fighting caused by stacked internal faces.
+  - Optional mounting lip/skirt around the rim so the mask can sit over a lens/dew shield.
 */
 
 const $ = (id) => document.getElementById(id);
@@ -24,14 +25,18 @@ const fields = {
   centerFraction: $('centerFraction'),
   hubDiameter: $('hubDiameter'),
   segments: $('segments'),
+  lipHeight: $('lipHeight'),
+  lipWallThickness: $('lipWallThickness'),
+  lipClearance: $('lipClearance'),
 };
 
 const autoScale = $('autoScale');
+const lipEnabled = $('lipEnabled');
 const calculated = $('calculated');
 const preview = $('preview');
 const partCount = $('partCount');
 const statusEl = $('status');
-const scalableFieldKeys = ['thickness', 'rimWidth', 'pitch', 'barWidth', 'angle', 'centerFraction', 'hubDiameter', 'segments'];
+const scalableFieldKeys = ['thickness', 'rimWidth', 'pitch', 'barWidth', 'angle', 'centerFraction', 'hubDiameter', 'segments', 'lipHeight', 'lipWallThickness', 'lipClearance'];
 
 function num(field) {
   return Number(field.value);
@@ -58,6 +63,9 @@ function autoDimensions(apertureDiameter) {
     angle: 20,
     centerFraction: 0.00,
     hubDiameter: 0,
+    lipHeight: clamp(d * 0.080, 3.0, 14.0),
+    lipWallThickness: clamp(d * 0.030, 1.2, 4.0),
+    lipClearance: clamp(d * 0.006, 0.4, 1.2),
     segments: d > 400 ? 384 : d > 225 ? 320 : d > 125 ? 256 : 192,
   };
 }
@@ -71,6 +79,9 @@ function writeAutoDimensions() {
   fields.angle.value = auto.angle;
   fields.centerFraction.value = auto.centerFraction.toFixed(2);
   fields.hubDiameter.value = roundTo(auto.hubDiameter, 1);
+  fields.lipHeight.value = roundTo(auto.lipHeight, 1);
+  fields.lipWallThickness.value = roundTo(auto.lipWallThickness, 1);
+  fields.lipClearance.value = roundTo(auto.lipClearance, 1);
   fields.segments.value = auto.segments;
 }
 
@@ -95,12 +106,20 @@ function settings() {
   const outerRadius = apertureRadius + rimWidth;
   const splitPointFraction = num(fields.centerFraction);
 
+  const lipIsEnabled = lipEnabled.checked;
+  const lipHeight = num(fields.lipHeight);
+  const lipWallThickness = num(fields.lipWallThickness);
+  const lipClearance = num(fields.lipClearance);
+  const lipInnerRadius = apertureRadius + lipClearance / 2;
+  const lipOuterRadius = lipInnerRadius + lipWallThickness;
+
   return {
     apertureDiameter,
     apertureRadius,
     outerRadius,
     outerDiameter: outerRadius * 2,
     thickness: num(fields.thickness),
+    totalHeight: num(fields.thickness) + (lipIsEnabled ? lipHeight : 0),
     rimWidth,
     pitch: num(fields.pitch),
     barWidth: num(fields.barWidth),
@@ -108,6 +127,14 @@ function settings() {
     splitPointFraction,
     splitPointX: apertureRadius * splitPointFraction,
     hubDiameter: num(fields.hubDiameter),
+    lipEnabled: lipIsEnabled,
+    lipHeight,
+    lipWallThickness,
+    lipClearance,
+    lipInnerRadius,
+    lipOuterRadius,
+    lipInnerDiameter: lipInnerRadius * 2,
+    lipOuterDiameter: lipOuterRadius * 2,
     segments: Math.round(num(fields.segments) / 2) * 2,
     overlap: clamp(apertureDiameter * 0.002, 0.15, 0.75),
   };
@@ -121,6 +148,12 @@ function validate(s) {
   if (s.barWidth <= 0 || s.barWidth >= s.pitch) return 'Slat width must be greater than 0 and smaller than pitch.';
   if (s.splitPointFraction < -0.35 || s.splitPointFraction > 0.35) return 'Vertical split position should be between -0.35 and 0.35 aperture radii.';
   if (s.hubDiameter < 0 || s.hubDiameter >= s.apertureDiameter) return 'Central solid disk must be smaller than the clear aperture.';
+  if (s.lipEnabled) {
+    if (s.lipHeight <= 0) return 'Lip height must be greater than 0.';
+    if (s.lipWallThickness <= 0) return 'Lip wall thickness must be greater than 0.';
+    if (s.lipClearance < 0) return 'Lip clearance cannot be negative.';
+    if (s.lipOuterRadius > s.outerRadius - 0.05) return 'Lip wall plus clearance is wider than the rim. Increase rim width or reduce lip wall thickness/clearance.';
+  }
   if (s.segments < 32) return 'Circle smoothness is too low.';
   return '';
 }
@@ -230,6 +263,9 @@ function makePreviewGeometry(s) {
   const dividerHalf = dividerWidth / 2;
 
   shapes.push({ kind: 'annulus', outerR: s.outerRadius, innerR: s.apertureRadius, segments: s.segments, name: 'outer-rim' });
+  if (s.lipEnabled) {
+    shapes.push({ kind: 'lip-annulus', outerR: s.lipOuterRadius, innerR: s.lipInnerRadius, segments: s.segments, name: 'mounting-lip' });
+  }
 
   maybeAddPolygon(
     shapes,
@@ -286,6 +322,17 @@ function pointIsSolid(x, y, s) {
   return false;
 }
 
+function pointIsLipSolid(x, y, s) {
+  if (!s.lipEnabled) return false;
+  const r = Math.hypot(x, y);
+  return r >= s.lipInnerRadius && r <= s.lipOuterRadius;
+}
+
+function pointTopHeight(x, y, s) {
+  if (!pointIsSolid(x, y, s)) return 0;
+  return s.thickness + (pointIsLipSolid(x, y, s) ? s.lipHeight : 0);
+}
+
 function normal(a, b, c) {
   const ux = b.x - a.x, uy = b.y - a.y, uz = b.z - a.z;
   const vx = c.x - a.x, vy = c.y - a.y, vz = c.z - a.z;
@@ -313,64 +360,103 @@ function makeGrid(s) {
   const cell = s.outerDiameter / cells;
   const min = -s.outerRadius;
   const grid = Array.from({ length: cells }, () => new Uint8Array(cells));
+  const heights = Array.from({ length: cells }, () => new Float32Array(cells));
   let solidCount = 0;
 
   for (let j = 0; j < cells; j++) {
     const y = min + (j + 0.5) * cell;
     for (let i = 0; i < cells; i++) {
       const x = min + (i + 0.5) * cell;
-      if (pointIsSolid(x, y, s)) {
+      const h = pointTopHeight(x, y, s);
+      if (h > 0) {
         grid[j][i] = 1;
+        heights[j][i] = h;
         solidCount++;
       }
     }
   }
 
-  return { grid, cells, cell, min, solidCount };
+  return { grid, heights, cells, cell, min, solidCount };
 }
 
-function greedyTopBottom(tris, gridInfo, thickness) {
-  const { grid, cells, cell, min } = gridInfo;
-  const visited = Array.from({ length: cells }, () => new Uint8Array(cells));
+function sameHeight(a, b) {
+  return Math.abs(a - b) < 1e-6;
+}
 
+function greedyTopBottom(tris, gridInfo) {
+  const { grid, heights, cells, cell, min } = gridInfo;
+
+  // Top faces: merge only cells with the same top height so lip steps stay real geometry.
+  const topVisited = Array.from({ length: cells }, () => new Uint8Array(cells));
   for (let j = 0; j < cells; j++) {
     for (let i = 0; i < cells; i++) {
-      if (!grid[j][i] || visited[j][i]) continue;
+      const h0 = heights[j][i];
+      if (!grid[j][i] || topVisited[j][i] || h0 <= 0) continue;
 
       let w = 1;
-      while (i + w < cells && grid[j][i + w] && !visited[j][i + w]) w++;
+      while (i + w < cells && grid[j][i + w] && !topVisited[j][i + w] && sameHeight(heights[j][i + w], h0)) w++;
 
-      let h = 1;
+      let hCells = 1;
       let canGrow = true;
-      while (j + h < cells && canGrow) {
+      while (j + hCells < cells && canGrow) {
         for (let x = i; x < i + w; x++) {
-          if (!grid[j + h][x] || visited[j + h][x]) {
+          if (!grid[j + hCells][x] || topVisited[j + hCells][x] || !sameHeight(heights[j + hCells][x], h0)) {
             canGrow = false;
             break;
           }
         }
-        if (canGrow) h++;
+        if (canGrow) hCells++;
       }
 
-      for (let yy = j; yy < j + h; yy++) {
-        for (let xx = i; xx < i + w; xx++) visited[yy][xx] = 1;
+      for (let yy = j; yy < j + hCells; yy++) {
+        for (let xx = i; xx < i + w; xx++) topVisited[yy][xx] = 1;
       }
 
       const x0 = min + i * cell;
       const x1 = min + (i + w) * cell;
       const y0 = min + j * cell;
-      const y1 = min + (j + h) * cell;
+      const y1 = min + (j + hCells) * cell;
 
-      // Top face, normal +Z.
       addQuad(
         tris,
-        { x: x0, y: y0, z: thickness },
-        { x: x1, y: y0, z: thickness },
-        { x: x1, y: y1, z: thickness },
-        { x: x0, y: y1, z: thickness }
+        { x: x0, y: y0, z: h0 },
+        { x: x1, y: y0, z: h0 },
+        { x: x1, y: y1, z: h0 },
+        { x: x0, y: y1, z: h0 }
       );
+    }
+  }
 
-      // Bottom face, normal -Z.
+  // Bottom faces: merge the full solid footprint at z=0.
+  const bottomVisited = Array.from({ length: cells }, () => new Uint8Array(cells));
+  for (let j = 0; j < cells; j++) {
+    for (let i = 0; i < cells; i++) {
+      if (!grid[j][i] || bottomVisited[j][i]) continue;
+
+      let w = 1;
+      while (i + w < cells && grid[j][i + w] && !bottomVisited[j][i + w]) w++;
+
+      let hCells = 1;
+      let canGrow = true;
+      while (j + hCells < cells && canGrow) {
+        for (let x = i; x < i + w; x++) {
+          if (!grid[j + hCells][x] || bottomVisited[j + hCells][x]) {
+            canGrow = false;
+            break;
+          }
+        }
+        if (canGrow) hCells++;
+      }
+
+      for (let yy = j; yy < j + hCells; yy++) {
+        for (let xx = i; xx < i + w; xx++) bottomVisited[yy][xx] = 1;
+      }
+
+      const x0 = min + i * cell;
+      const x1 = min + (i + w) * cell;
+      const y0 = min + j * cell;
+      const y1 = min + (j + hCells) * cell;
+
       addQuad(
         tris,
         { x: x0, y: y0, z: 0 },
@@ -382,61 +468,43 @@ function greedyTopBottom(tris, gridInfo, thickness) {
   }
 }
 
-function addSideWalls(tris, gridInfo, thickness) {
-  const { grid, cells, cell, min } = gridInfo;
-  const solid = (i, j) => i >= 0 && i < cells && j >= 0 && j < cells && grid[j][i];
+function addSideWalls(tris, gridInfo) {
+  const { heights, cells, cell, min } = gridInfo;
+  const heightAt = (i, j) => i >= 0 && i < cells && j >= 0 && j < cells ? heights[j][i] : 0;
 
-  // South/north edges, merge along X.
   for (let j = 0; j < cells; j++) {
-    let i = 0;
-    while (i < cells) {
-      if (solid(i, j) && !solid(i, j - 1)) {
-        const start = i;
-        while (i < cells && solid(i, j) && !solid(i, j - 1)) i++;
-        const x0 = min + start * cell;
-        const x1 = min + i * cell;
-        const y = min + j * cell;
-        addQuad(tris, { x: x0, y, z: 0 }, { x: x1, y, z: 0 }, { x: x1, y, z: thickness }, { x: x0, y, z: thickness });
-      } else i++;
-    }
+    for (let i = 0; i < cells; i++) {
+      const h = heightAt(i, j);
+      if (h <= 0) continue;
 
-    i = 0;
-    while (i < cells) {
-      if (solid(i, j) && !solid(i, j + 1)) {
-        const start = i;
-        while (i < cells && solid(i, j) && !solid(i, j + 1)) i++;
-        const x0 = min + start * cell;
-        const x1 = min + i * cell;
-        const y = min + (j + 1) * cell;
-        addQuad(tris, { x: x0, y, z: 0 }, { x: x0, y, z: thickness }, { x: x1, y, z: thickness }, { x: x1, y, z: 0 });
-      } else i++;
-    }
-  }
+      const x0 = min + i * cell;
+      const x1 = min + (i + 1) * cell;
+      const y0 = min + j * cell;
+      const y1 = min + (j + 1) * cell;
 
-  // West/east edges, merge along Y.
-  for (let i = 0; i < cells; i++) {
-    let j = 0;
-    while (j < cells) {
-      if (solid(i, j) && !solid(i - 1, j)) {
-        const start = j;
-        while (j < cells && solid(i, j) && !solid(i - 1, j)) j++;
-        const y0 = min + start * cell;
-        const y1 = min + j * cell;
-        const x = min + i * cell;
-        addQuad(tris, { x, y: y0, z: 0 }, { x, y: y0, z: thickness }, { x, y: y1, z: thickness }, { x, y: y1, z: 0 });
-      } else j++;
-    }
+      // South edge.
+      let nh = heightAt(i, j - 1);
+      if (h > nh) {
+        addQuad(tris, { x: x0, y: y0, z: nh }, { x: x1, y: y0, z: nh }, { x: x1, y: y0, z: h }, { x: x0, y: y0, z: h });
+      }
 
-    j = 0;
-    while (j < cells) {
-      if (solid(i, j) && !solid(i + 1, j)) {
-        const start = j;
-        while (j < cells && solid(i, j) && !solid(i + 1, j)) j++;
-        const y0 = min + start * cell;
-        const y1 = min + j * cell;
-        const x = min + (i + 1) * cell;
-        addQuad(tris, { x, y: y0, z: 0 }, { x, y: y1, z: 0 }, { x, y: y1, z: thickness }, { x, y: y0, z: thickness });
-      } else j++;
+      // North edge.
+      nh = heightAt(i, j + 1);
+      if (h > nh) {
+        addQuad(tris, { x: x0, y: y1, z: nh }, { x: x0, y: y1, z: h }, { x: x1, y: y1, z: h }, { x: x1, y: y1, z: nh });
+      }
+
+      // West edge.
+      nh = heightAt(i - 1, j);
+      if (h > nh) {
+        addQuad(tris, { x: x0, y: y0, z: nh }, { x: x0, y: y0, z: h }, { x: x0, y: y1, z: h }, { x: x0, y: y1, z: nh });
+      }
+
+      // East edge.
+      nh = heightAt(i + 1, j);
+      if (h > nh) {
+        addQuad(tris, { x: x1, y: y0, z: nh }, { x: x1, y: y1, z: nh }, { x: x1, y: y1, z: h }, { x: x1, y: y0, z: h });
+      }
     }
   }
 }
@@ -449,12 +517,12 @@ function generateSTL(s) {
   if (!gridInfo.solidCount) throw new Error('Generated mask is empty. Check the dimensions.');
 
   const tris = [];
-  greedyTopBottom(tris, gridInfo, s.thickness);
-  addSideWalls(tris, gridInfo, s.thickness);
+  greedyTopBottom(tris, gridInfo);
+  addSideWalls(tris, gridInfo);
 
-  let stl = 'solid bahtinov_mask_classic_v4_single_mesh\n';
+  let stl = 'solid bahtinov_mask_classic_v5_lip_mesh\n';
   for (const tri of tris) stl += facet(tri[0], tri[1], tri[2]);
-  stl += 'endsolid bahtinov_mask_classic_v4_single_mesh\n';
+  stl += 'endsolid bahtinov_mask_classic_v5_lip_mesh\n';
 
   return { stl, shapes: makePreviewGeometry(s), gridInfo, triCount: tris.length };
 }
@@ -487,10 +555,10 @@ function renderPreview(s) {
   preview.appendChild(aperture);
 
   for (const shape of shapes) {
-    if (shape.kind === 'annulus') {
+    if (shape.kind === 'annulus' || shape.kind === 'lip-annulus') {
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
       path.setAttribute('d', ringPath(shape.outerR, shape.innerR));
-      path.setAttribute('class', 'mask-ring');
+      path.setAttribute('class', shape.kind === 'lip-annulus' ? 'mask-lip' : 'mask-ring');
       preview.appendChild(path);
     } else if (shape.kind === 'disk') {
       const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
@@ -505,7 +573,7 @@ function renderPreview(s) {
     }
   }
 
-  partCount.textContent = `single mesh STL`;
+  partCount.textContent = s.lipEnabled ? `single mesh + lip` : `single mesh STL`;
 }
 
 function renderCalculatedSummary(s) {
@@ -515,6 +583,8 @@ function renderCalculatedSummary(s) {
     <div><strong>Thickness</strong><span>${s.thickness.toFixed(1)} mm</span></div>
     <div><strong>Rim</strong><span>${s.rimWidth.toFixed(1)} mm</span></div>
     <div><strong>Slats</strong><span>${s.barWidth.toFixed(1)} mm wide / ${s.pitch.toFixed(1)} mm pitch</span></div>
+    <div><strong>Mounting lip</strong><span>${s.lipEnabled ? `${s.lipInnerDiameter.toFixed(1)} mm ID / ${s.lipHeight.toFixed(1)} mm tall` : 'off'}</span></div>
+    <div><strong>Total height</strong><span>${s.totalHeight.toFixed(1)} mm</span></div>
     <div><strong>STL cell size</strong><span>~${targetCell.toFixed(2)} mm</span></div>
   `;
 }
@@ -543,7 +613,7 @@ function update() {
     renderCalculatedSummary(s);
     renderPreview(s);
     statusEl.className = 'ok';
-    statusEl.textContent = `Ready: classic v4 single-mesh STL. ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter.`;
+    statusEl.textContent = `Ready: classic v5 lip-ready single-mesh STL. ${s.apertureDiameter.toFixed(1)} mm aperture, ${s.outerDiameter.toFixed(1)} mm printed outside diameter.`;
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;
@@ -552,13 +622,14 @@ function update() {
 
 for (const input of Object.values(fields)) input.addEventListener('input', update);
 autoScale.addEventListener('change', update);
+lipEnabled.addEventListener('change', update);
 $('recommended').addEventListener('click', resetAutoScale);
 $('downloadStl').addEventListener('click', () => {
   try {
     const s = settings();
     const { stl, gridInfo, triCount } = generateSTL(s);
     const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
-    blobDownload(stl, `bahtinov-mask-classic-v4-${safeD}mm-aperture.stl`);
+    blobDownload(stl, `bahtinov-mask-classic-v5-${safeD}mm-aperture.stl`);
     statusEl.className = 'ok';
     statusEl.textContent = `Downloaded single-mesh STL: ${gridInfo.cells} × ${gridInfo.cells} grid, ${triCount.toLocaleString()} triangles.`;
   } catch (err) {
@@ -571,7 +642,7 @@ $('downloadSvg').addEventListener('click', () => {
     update();
     const s = settings();
     const safeD = String(s.apertureDiameter).replace(/[^0-9.]/g, '_');
-    blobDownload(makeSvgText(), `bahtinov-mask-classic-v4-${safeD}mm-aperture.svg`, 'image/svg+xml');
+    blobDownload(makeSvgText(), `bahtinov-mask-classic-v5-${safeD}mm-aperture.svg`, 'image/svg+xml');
   } catch (err) {
     statusEl.className = 'error';
     statusEl.textContent = err.message;

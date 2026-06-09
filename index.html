@@ -9,9 +9,9 @@
 <body>
   <header class="hero">
     <div>
-      <p class="eyebrow">Static GitHub Pages App · Classic Layout v4</p>
+      <p class="eyebrow">Static GitHub Pages App · Classic Layout v5</p>
       <h1>Bahtinov Mask STL Generator</h1>
-      <p class="lede">Enter one aperture diameter in millimeters and the generator automatically scales the rim, slats, thickness, spacing, and STL detail. STL export is now a single clean mesh to avoid slicer clipping weirdness.</p>
+      <p class="lede">Enter one aperture diameter in millimeters and the generator automatically scales the rim, slats, thickness, spacing, and STL detail. STL export is a single clean mesh and now includes an optional mounting lip/skirt so it can sit over a lens.</p>
     </div>
   </header>
 
@@ -32,6 +32,11 @@
         <label class="checkline">
           <input id="autoScale" type="checkbox" checked />
           <span>Auto-scale all geometry from diameter</span>
+        </label>
+
+        <label class="checkline">
+          <input id="lipEnabled" type="checkbox" checked />
+          <span>Add mounting lip / lens skirt</span>
         </label>
 
         <div id="calculated" class="calculated" aria-live="polite"></div>
@@ -83,6 +88,24 @@
           </label>
 
           <label>
+            <span>Lip height</span>
+            <input id="lipHeight" type="number" min="0.5" max="50" step="0.1" value="6" />
+            <small>How tall the wall/skirt is. The lip prints on top of the rim; use the lip side against the lens.</small>
+          </label>
+
+          <label>
+            <span>Lip wall thickness</span>
+            <input id="lipWallThickness" type="number" min="0.5" max="25" step="0.1" value="2" />
+            <small>Thickness of the cylindrical wall. Must fit inside the outer rim width.</small>
+          </label>
+
+          <label>
+            <span>Lip clearance</span>
+            <input id="lipClearance" type="number" min="0" max="10" step="0.1" value="0.6" />
+            <small>Extra diameter clearance for slipping over the lens/dew shield. Lip inner diameter = aperture diameter + clearance.</small>
+          </label>
+
+          <label>
             <span>Circle smoothness</span>
             <input id="segments" type="number" min="64" max="512" step="16" value="192" />
             <small>Higher = smoother SVG preview. STL export uses an internal single-mesh grid to avoid overlapping solids.</small>
@@ -104,7 +127,7 @@
         <span id="partCount" class="pill">0 parts</span>
       </div>
       <svg id="preview" viewBox="-60 -60 120 120" role="img" aria-label="Bahtinov mask preview"></svg>
-      <p class="note">The SVG preview shows the vector layout. The downloaded STL is generated as one watertight grid mesh, so it avoids the overlapping-solid clipping issues from the earlier versions.</p>
+      <p class="note">The SVG preview shows the top-down vector layout. The brighter rim overlay is the optional lip footprint; the STL adds it as a raised wall/skirt on the rim.</p>
     </section>
   </main>
 

@@ -229,6 +229,7 @@ button.primary { background: linear-gradient(135deg, var(--accent), var(--accent
 .mask-shape { fill: rgba(125,211,252,0.76); stroke: rgba(238,244,255,0.35); stroke-width: 0.06; }
 .mask-ring { fill: rgba(238,244,255,0.18); stroke: rgba(238,244,255,0.55); stroke-width: 0.08; fill-rule: evenodd; }
 .mask-hub { fill: rgba(238,244,255,0.22); stroke: rgba(238,244,255,0.55); stroke-width: 0.08; }
+.mask-lip { fill: rgba(56,189,248,0.18); stroke: rgba(125,211,252,0.85); stroke-width: 0.18; fill-rule: evenodd; }
 
 footer { padding: 0 0 36px; }
 
