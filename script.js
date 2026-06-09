@@ -9,7 +9,10 @@
 
   Geometry model:
   - Outer annular rim.
-  - Solid slats clipped into three Bahtinov zones.
+  - Classic 3-zone Bahtinov layout:
+      * left zone = straight slats
+      * upper-right zone = diagonal slats
+      * lower-right zone = opposite diagonal slats
   - Optional central solid hub.
   - Every shape is extruded into an ASCII STL.
 */
@@ -58,7 +61,7 @@ function autoDimensions(apertureDiameter) {
     pitch,
     barWidth,
     angle: 20,
-    centerFraction: 0.34,
+    centerFraction: 0.14,
     hubDiameter: 0,
     segments: d > 400 ? 384 : d > 225 ? 320 : d > 125 ? 256 : 192,
   };
@@ -95,6 +98,7 @@ function settings() {
   const rimWidth = num(fields.rimWidth);
   const apertureRadius = apertureDiameter / 2;
   const outerRadius = apertureRadius + rimWidth;
+  const splitPointFraction = num(fields.centerFraction);
 
   return {
     apertureDiameter,
@@ -106,10 +110,12 @@ function settings() {
     pitch: num(fields.pitch),
     barWidth: num(fields.barWidth),
     angleDeg: num(fields.angle),
-    centerFraction: num(fields.centerFraction),
+    splitPointFraction,
+    splitPointX: apertureRadius * splitPointFraction,
     hubDiameter: num(fields.hubDiameter),
     segments: Math.round(num(fields.segments) / 2) * 2,
     overlap: clamp(apertureDiameter * 0.003, 0.25, 1.0),
+    separatorAngleDeg: 30,
   };
 }
 
@@ -119,7 +125,7 @@ function validate(s) {
   if (s.thickness <= 0) return 'Thickness must be greater than 0.';
   if (s.pitch <= 0) return 'Pitch must be greater than 0.';
   if (s.barWidth <= 0 || s.barWidth >= s.pitch) return 'Slat width must be greater than 0 and smaller than pitch.';
-  if (s.centerFraction <= 0 || s.centerFraction >= 1) return 'Center section width must be a fraction between 0 and 1.';
+  if (s.splitPointFraction < 0 || s.splitPointFraction > 0.45) return 'Split point position should be between 0.00 and 0.45 aperture radii.';
   if (s.hubDiameter < 0 || s.hubDiameter >= s.apertureDiameter) return 'Central solid disk must be smaller than the clear aperture.';
   if (s.segments < 32) return 'Circle smoothness is too low.';
   return '';
@@ -185,19 +191,43 @@ function polygonArea(poly) {
   return area / 2;
 }
 
+function buildZonePolygon(base, zone, splitX, splitSlope) {
+  let poly = base.slice();
+
+  if (zone === 'left-upper') {
+    poly = clipHalfPlane(poly, 0, 1, 0, false);             // y >= 0
+    poly = clipHalfPlane(poly, 1, -splitSlope, splitX, true); // x - m*y <= splitX
+  } else if (zone === 'left-lower') {
+    poly = clipHalfPlane(poly, 0, 1, 0, true);              // y <= 0
+    poly = clipHalfPlane(poly, 1, splitSlope, splitX, true);  // x + m*y <= splitX
+  } else if (zone === 'upper-right') {
+    poly = clipHalfPlane(poly, 0, 1, 0, false);             // y >= 0
+    poly = clipHalfPlane(poly, 1, -splitSlope, splitX, false); // x - m*y >= splitX
+  } else if (zone === 'lower-right') {
+    poly = clipHalfPlane(poly, 0, 1, 0, true);              // y <= 0
+    poly = clipHalfPlane(poly, 1, splitSlope, splitX, false);  // x + m*y >= splitX
+  }
+
+  return poly;
+}
+
 function makeSlats(s) {
   const clearRWithOverlap = s.apertureRadius + s.overlap;
   const base = circlePolygon(clearRWithOverlap, s.segments);
-  const centerHalfWidth = s.apertureDiameter * s.centerFraction / 2;
   const hubR = Math.max(0, s.hubDiameter / 2 - s.overlap);
+  const splitSlope = 1 / Math.tan(s.separatorAngleDeg * Math.PI / 180);
   const zones = [
-    { name: 'left', minX: -clearRWithOverlap, maxX: -centerHalfWidth, angle: s.angleDeg },
-    { name: 'center', minX: -centerHalfWidth, maxX: centerHalfWidth, angle: 90 },
-    { name: 'right', minX: centerHalfWidth, maxX: clearRWithOverlap, angle: -s.angleDeg },
+    { name: 'left-upper', angle: 0 },
+    { name: 'left-lower', angle: 0 },
+    { name: 'upper-right', angle: -s.angleDeg },
+    { name: 'lower-right', angle: s.angleDeg },
   ];
 
   const slats = [];
   for (const zone of zones) {
+    const zonePoly = buildZonePolygon(base, zone.name, s.splitPointX, splitSlope);
+    if (zonePoly.length < 3) continue;
+
     const theta = zone.angle * Math.PI / 180;
     // u is the long direction of the slat. n is perpendicular and sets pitch spacing.
     const nx = -Math.sin(theta);
@@ -208,20 +238,15 @@ function makeSlats(s) {
 
     for (let k = start; k <= end; k++) {
       const c = k * s.pitch;
-      let poly = base.slice();
-      poly = clipHalfPlane(poly, 1, 0, zone.maxX, true);
-      poly = clipHalfPlane(poly, 1, 0, zone.minX, false);
+      let poly = zonePoly.slice();
       poly = clipHalfPlane(poly, nx, ny, c + s.barWidth / 2, true);
       poly = clipHalfPlane(poly, nx, ny, c - s.barWidth / 2, false);
 
-      if (hubR > 0) {
-        // Keep slats out of the optional hub area when possible to reduce duplicate geometry.
-        // This is an approximation using the polygon centroid, not a true circular boolean.
+      if (hubR > 0 && poly.length) {
         const centroid = poly.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-        if (poly.length) {
-          centroid.x /= poly.length; centroid.y /= poly.length;
-          if (Math.hypot(centroid.x, centroid.y) < hubR * 0.8) poly = [];
-        }
+        centroid.x /= poly.length;
+        centroid.y /= poly.length;
+        if (Math.hypot(centroid.x, centroid.y) < hubR * 0.8) poly = [];
       }
 
       if (poly.length >= 3 && Math.abs(polygonArea(poly)) > 0.5) {
